@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0C41C4" />
+
+  <meta name="description" content="Hub de accesos para el equipo administrativo de Musicala (login con Google)." />
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <!-- iOS niceties (no rompe nada si no aplica) -->
+  <meta name="format-detection" content="telephone=no,date=no,address=no,email=no,url=no" />
+  <meta name="apple-mobile-web-app-title" content="Musicala Admin" />
+
+  <!-- iOS splash (simple, opcional: pon una imagen si quieres) -->
+  <!-- <link rel="apple-touch-startup-image" href="./icons/splash-2048x2732.png" /> -->
+
+  <title>Musicala Admin Hub</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <!-- App root (sin mockup de teléfono) -->
+  <div class="appRoot" role="application" aria-label="Musicala Admin Hub · Accesos">
+    <div class="screen">
+      <!-- ===== LOGIN ===== -->
+      <main class="wrap" id="view-login" hidden>
+        <section class="loginCard" aria-label="Inicio de sesión">
+          <div class="loginBrand">
+            <div class="mark" aria-hidden="true">
+              <img class="markImg" src="./logo.png" alt="Musicala"
+                   onerror="this.style.display='none'; this.parentElement.classList.add('fallback');" />
+              <div class="markFallback" aria-hidden="true">🎶</div>
+            </div>
+
+            <div class="brandText">
+              <h1 class="brandTitle">Musicala</h1>
+              <p class="brandSub">Admin Hub</p>
+            </div>
+          </div>
+
+          <div class="loginActions">
+            <button class="btnGoogle" id="btn-google" type="button">
+              <span class="gIcon" aria-hidden="true">G</span>
+              Entrar con Google
+            </button>
+
+            <button class="btnGhost" id="btn-install" type="button" hidden>
+              Instalar app
+            </button>
+
+            <p class="loginHint">Usa tu cuenta autorizada por Musicala 🙂</p>
+          </div>
+        </section>
+
+        <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+      </main>
+
+      <!-- ===== APP ===== -->
+      <main class="wrap" id="view-app" hidden>
+        <header class="top" role="banner">
+          <div class="brand">
+            <div class="logoWrap" aria-hidden="true">
+              <img class="logoImg" src="./logo.png" alt=""
+                   onerror="this.style.display='none'; this.parentElement.classList.add('fallback');" />
+              <div class="logoFallback" aria-hidden="true">🎓</div>
+            </div>
+
+            <div class="brandCopy">
+              <h2 class="appTitle">Musicala Admin Hub</h2>
+              <p id="user-line">Accesos rápidos</p>
+            </div>
+
+            <div class="brandActions" aria-label="Acciones">
+              <button class="btnGhost" id="btn-install-2" type="button" title="Instalar" hidden>
+                Instalar
+              </button>
+
+              <button class="btnGhost" id="btn-logout" type="button" title="Salir">
+                Salir
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <section class="grid" id="grid" aria-label="Accesos"></section>
+
+        <div class="toast" id="toast-app" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+      </main>
+
+      <script type="module" src="./app.js"></script>
+      <noscript>Esta app necesita JavaScript para funcionar.</noscript>
+    </div>
+  </div>
+
+  <!-- Nota: Dejé 2 toasts (uno por vista) para que el layout no “salte”.
+       Si tu CSS/JS solo usa #toast, el de login ya existe y funciona.
+       El #toast-app está oculto y no estorba. -->
+</body>
+</html>

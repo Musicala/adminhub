@@ -1,0 +1,744 @@
+/* ==========================================================================
+   Musicala · Admin Hub / Practicantes Hub (SIMPLE + Firebase Login, LIGHT ONLY)
+   UI: Musicala Style · Premium glass + cards (Dashboard-like)
+   - Sin tocar IDs ni JS
+   - Mobile-first, PWA-friendly, accesible
+   - Adaptado a index.html SIN .device/.deviceNotch (appRoot + screen)
+========================================================================== */
+
+:root{
+  /* ===== Core palette ===== */
+  --bg:#f6f8ff;
+  --bg2:#eef2ff;
+  --card: rgba(255,255,255,.86);
+  --card2: rgba(255,255,255,.94);
+  --text:#0b1020;
+  --muted: rgba(11,16,32,.65);
+  --line: rgba(11,16,32,.12);
+
+  /* Musicala accents */
+  --a1:#0C41C4; /* Azul Mozart */
+  --a2:#680DBF; /* Violeta Beethoven */
+  --a3:#CE0071; /* Magenta Brahms */
+
+  /* ===== Radii / shadows ===== */
+  --r:18px;
+  --r2:22px;
+  --r3:28px;
+  --r4:34px;
+
+  --shadow: 0 18px 44px rgba(11,16,32,.12);
+  --shadow2: 0 10px 22px rgba(11,16,32,.08);
+  --shadow3: 0 26px 66px rgba(11,16,32,.16);
+  --shadowSoft: 0 12px 30px rgba(11,16,32,.10);
+
+  /* ===== Glass / blur ===== */
+  --blur: 18px;
+  --glass: rgba(255,255,255,.62);
+  --glass2: rgba(255,255,255,.78);
+  --glass3: rgba(255,255,255,.88);
+
+  /* ===== Focus rings ===== */
+  --ring: 0 0 0 4px rgba(12,65,196,.14);
+  --ring2: 0 0 0 4px rgba(104,13,191,.12);
+  --ring3: 0 0 0 4px rgba(206,0,113,.10);
+
+  /* ===== Layout tokens ===== */
+  --maxW: 980px;
+  --padX: 16px;
+  --padY: 16px;
+
+  /* ===== Cards grid tokens ===== */
+  --gridGap: 14px;
+  --tilePad: 14px;
+  --tileRadius: 22px;
+
+  --iconCardSize: 46px;
+  --iconCardRadius: 16px;
+
+  --titleSize: 14px;
+  --subSize: 12px;
+
+  --tapScale: .985;
+
+  /* ===== Motion ===== */
+  --easeOut: cubic-bezier(.2,.9,.2,1);
+  --easeSoft: cubic-bezier(.2,.7,.2,1);
+  --durFast: 140ms;
+  --durMed: 240ms;
+}
+
+/* ===== Reset ===== */
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+img{ max-width:100%; display:block; }
+button{ font: inherit; }
+:focus{ outline:none; }
+
+::selection{ background: rgba(12,65,196,.14); }
+
+/* ===== Page background ===== */
+body{
+  margin:0;
+  padding:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  color:var(--text);
+  background:
+    radial-gradient(1200px 600px at 10% 0%, rgba(12,65,196,.16), transparent 60%),
+    radial-gradient(900px 500px at 90% 10%, rgba(104,13,191,.14), transparent 60%),
+    radial-gradient(900px 500px at 50% 100%, rgba(206,0,113,.12), transparent 62%),
+    linear-gradient(180deg, var(--bg), var(--bg2));
+}
+
+/* ==========================================================================
+   APP ROOT (reemplaza el “mockup” del teléfono)
+========================================================================== */
+.appRoot{
+  min-height: 100%;
+  width: 100%;
+  display:flex;
+  justify-content:center;
+  padding: 14px;
+}
+
+/* “Pantalla” real: card grande centrada (pero no fake phone) */
+.screen{
+  width: 100%;
+  max-width: var(--maxW);
+  margin: 0 auto;
+  border-radius: clamp(22px, 3vw, 34px);
+  background: rgba(255,255,255,.54);
+  border: 1px solid rgba(11,16,32,.10);
+  box-shadow: 0 30px 90px rgba(11,16,32,.14);
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* Blobs internos sutiles (premium, no carnaval) */
+.screen::before{
+  content:"";
+  position:absolute;
+  inset:-60px;
+  background:
+    radial-gradient(900px 520px at 8% 0%, rgba(12,65,196,.18), transparent 62%),
+    radial-gradient(760px 520px at 92% 8%, rgba(104,13,191,.16), transparent 64%),
+    radial-gradient(900px 620px at 45% 115%, rgba(206,0,113,.12), transparent 62%);
+  filter: blur(12px);
+  pointer-events:none;
+}
+
+/* Vignette suave para profundidad */
+.screen::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:
+    radial-gradient(110% 70% at 50% 0%, rgba(255,255,255,.44), transparent 55%),
+    radial-gradient(100% 90% at 50% 115%, rgba(11,16,32,.06), transparent 55%);
+  pointer-events:none;
+}
+
+.screen > *{ position: relative; z-index: 1; }
+
+/* Wrap: centra el contenido y da respiración */
+.wrap{
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 18px var(--padX) 18px;
+}
+
+/* Scroll suave dentro del “screen” si se usa en preview muy pequeño */
+@media (max-height: 740px){
+  .appRoot{ padding: 10px; }
+  .wrap{ padding-bottom: 14px; }
+}
+
+/* Scrollbars (solo desktop) */
+@media (hover:hover) and (pointer:fine){
+  .screen{
+    overflow: auto;
+    max-height: calc(100vh - 28px);
+    -webkit-overflow-scrolling: touch;
+  }
+  .screen::-webkit-scrollbar{ width: 10px; }
+  .screen::-webkit-scrollbar-thumb{
+    background: rgba(11,16,32,.12);
+    border-radius: 999px;
+    border: 3px solid rgba(255,255,255,.38);
+  }
+  .screen::-webkit-scrollbar-track{ background: transparent; }
+}
+
+/* ==========================================================================
+   HEADER (hero bar premium)
+========================================================================== */
+.top{
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  padding: 14px var(--padX) 10px;
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+}
+
+/* Fade suave arriba (iOS-ish, pero elegante) */
+.top::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background: linear-gradient(to bottom, rgba(255,255,255,.68), rgba(255,255,255,0));
+  pointer-events:none;
+  z-index: -1;
+}
+
+/* Barra principal */
+.brand{
+  display:flex;
+  gap:12px;
+  align-items:center;
+  padding: 14px 14px;
+  border-radius: 26px;
+  background: var(--glass2);
+  border: 1px solid rgba(11,16,32,.10);
+  box-shadow: 0 18px 50px rgba(11,16,32,.10);
+  position:relative;
+  overflow:hidden;
+}
+
+/* Glow interno Musicala */
+.brand::before{
+  content:"";
+  position:absolute;
+  inset:-1px;
+  background: linear-gradient(135deg,
+    rgba(12,65,196,.18),
+    rgba(104,13,191,.12),
+    rgba(206,0,113,.10)
+  );
+  opacity:.50;
+  filter: blur(20px);
+  pointer-events:none;
+}
+.brand > *{ position:relative; }
+
+.logoWrap{
+  width:46px; height:46px;
+  border-radius: 16px;
+  display:grid;
+  place-items:center;
+  background: linear-gradient(135deg, rgba(12,65,196,.14), rgba(104,13,191,.10));
+  border: 1px solid rgba(11,16,32,.10);
+  box-shadow: 0 10px 24px rgba(11,16,32,.10);
+  overflow:hidden;
+}
+.logoImg{ width: 82%; height: 82%; object-fit: contain; }
+.logoFallback{ display:none; font-size: 20px; }
+.logoWrap.fallback .logoFallback{ display:block; }
+
+.brandCopy{ flex:1; min-width: 0; }
+.appTitle{
+  margin:0;
+  font-size: 15px;
+  letter-spacing:.2px;
+  line-height: 1.12;
+  font-weight: 900;
+}
+#user-line{
+  margin:3px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Actions */
+.brandActions{
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+
+/* Ghost button (logout / install) */
+.btnGhost{
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(11,16,32,.14);
+  background: rgba(255,255,255,.82);
+  color: rgba(11,16,32,.82);
+  cursor:pointer;
+  font-weight: 750;
+  letter-spacing: .1px;
+  transition:
+    transform var(--durFast) var(--easeSoft),
+    border-color var(--durFast) var(--easeSoft),
+    box-shadow var(--durFast) var(--easeSoft),
+    background var(--durFast) var(--easeSoft);
+}
+.btnGhost:hover{
+  border-color: rgba(12,65,196,.22);
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 12px 24px rgba(11,16,32,.10);
+}
+.btnGhost:active{ transform: scale(var(--tapScale)); }
+
+/* En pantallas mini, compacta */
+@media (max-width: 380px){
+  .brand{ padding: 12px 12px; }
+  .btnGhost{ padding: 0 10px; }
+  .appTitle{ font-size: 14.5px; }
+}
+
+/* ==========================================================================
+   LOGIN (premium)
+========================================================================== */
+.loginCard{
+  margin: clamp(38px, 10vh, 92px) auto 0;
+  max-width: 560px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: var(--card2);
+  border-radius: 30px;
+  padding: 24px 18px 18px;
+  box-shadow: var(--shadow);
+  position:relative;
+  overflow:hidden;
+}
+
+/* Sutil sheen */
+.loginCard::before{
+  content:"";
+  position:absolute;
+  inset:-40% -60%;
+  background: radial-gradient(closest-side, rgba(255,255,255,.60), transparent 62%);
+  transform: translateX(-30%) rotate(12deg);
+  opacity: .24;
+  pointer-events:none;
+}
+
+.loginBrand{
+  display:flex;
+  gap:14px;
+  align-items:center;
+  padding: 6px 6px 14px;
+  position:relative;
+  z-index:1;
+}
+
+.mark{
+  width: 70px;
+  height: 70px;
+  border-radius: 24px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: linear-gradient(135deg, rgba(12,65,196,.16), rgba(104,13,191,.12));
+  display:grid;
+  place-items:center;
+  position:relative;
+  overflow:hidden;
+  box-shadow: 0 18px 40px rgba(11,16,32,.12);
+}
+.mark::after{
+  content:"";
+  position:absolute;
+  inset:-40% -60%;
+  background: radial-gradient(closest-side, rgba(255,255,255,.55), transparent 60%);
+  transform: translateX(-35%) rotate(14deg);
+  opacity: .35;
+  pointer-events:none;
+}
+.markImg{ width: 82%; height: 82%; object-fit: contain; }
+.markFallback{ display:none; font-size: 28px; }
+.mark.fallback .markFallback{ display:block; }
+
+.brandTitle{
+  margin:0;
+  font-size: 30px;
+  letter-spacing: .2px;
+  line-height: 1.05;
+  font-weight: 950;
+}
+.brandSub{
+  margin:6px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.loginActions{
+  display:grid;
+  gap: 10px;
+  padding: 6px;
+  position:relative;
+  z-index:1;
+}
+
+.btnGoogle{
+  height: 50px;
+  border-radius: 18px;
+  border: 1px solid rgba(11,16,32,.14);
+  background: rgba(255,255,255,.98);
+  cursor:pointer;
+  font-weight: 850;
+  font-size: 14.5px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  box-shadow: var(--shadow2);
+  transition:
+    transform var(--durFast) var(--easeSoft),
+    box-shadow var(--durFast) var(--easeSoft),
+    border-color var(--durFast) var(--easeSoft),
+    background var(--durFast) var(--easeSoft);
+}
+.btnGoogle:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+  border-color: rgba(12,65,196,.20);
+}
+.btnGoogle:active{ transform: translateY(0px) scale(var(--tapScale)); }
+
+.gIcon{
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  display:grid;
+  place-items:center;
+  background: linear-gradient(135deg, rgba(12,65,196,.10), rgba(206,0,113,.08));
+  border: 1px solid rgba(11,16,32,.10);
+  font-weight: 950;
+}
+
+.loginHint{
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+}
+
+/* Install button on login */
+.loginActions .btnGhost{
+  height: 50px;
+  border-radius: 18px;
+  width: 100%;
+}
+
+/* ==========================================================================
+   APP GRID (dashboard cards)
+========================================================================== */
+.grid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gridGap);
+  padding: 10px var(--padX) 120px;
+  margin: 0;
+  align-content: start;
+}
+
+/* Tiny screens 1 col */
+@media (max-width: 350px){
+  .grid{ grid-template-columns: 1fr; }
+}
+
+/* Card button */
+.tile{
+  appearance:none;
+  border: 1px solid rgba(11,16,32,.10);
+  background: rgba(255,255,255,.74);
+  padding: var(--tilePad);
+  border-radius: var(--tileRadius);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  text-align: left;
+
+  box-shadow: 0 14px 34px rgba(11,16,32,.10);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+
+  position: relative;
+  overflow: hidden;
+
+  transition:
+    transform var(--durFast) var(--easeSoft),
+    box-shadow var(--durFast) var(--easeSoft),
+    border-color var(--durFast) var(--easeSoft),
+    filter var(--durFast) var(--easeSoft);
+}
+
+/* Soft overlay */
+.tile::before{
+  content:"";
+  position:absolute;
+  inset:-45%;
+  background: radial-gradient(closest-side, rgba(255,255,255,.62), transparent 62%);
+  opacity: .20;
+  transform: translateX(-8%) translateY(-10%);
+  pointer-events:none;
+}
+.tile > *{ position:relative; }
+
+.tile:hover{
+  transform: translateY(-2px);
+  box-shadow: 0 22px 56px rgba(11,16,32,.14);
+  border-color: rgba(12,65,196,.16);
+}
+.tile:active{ transform: translateY(0) scale(var(--tapScale)); }
+
+/* Focus accesible */
+.tile:focus-visible{
+  box-shadow: var(--ring), 0 18px 44px rgba(11,16,32,.12);
+  border-color: rgba(12,65,196,.28);
+}
+
+/* Header interno */
+.tileTop{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  margin: 0 0 10px 0;
+}
+
+/* Icon */
+.ico{
+  width: var(--iconCardSize);
+  height: var(--iconCardSize);
+  border-radius: var(--iconCardRadius);
+  display:grid;
+  place-items:center;
+
+  background: rgba(255,255,255,.40);
+  border: 1px solid rgba(255,255,255,.40);
+  box-shadow: 0 12px 26px rgba(11,16,32,.12);
+
+  font-size: 22px;
+  position: relative;
+  overflow:hidden;
+
+  transition:
+    transform var(--durFast) var(--easeSoft),
+    box-shadow var(--durFast) var(--easeSoft),
+    border-color var(--durFast) var(--easeSoft),
+    background var(--durFast) var(--easeSoft);
+}
+.ico::after{
+  content:"";
+  position:absolute;
+  inset:-40% -60%;
+  background: radial-gradient(closest-side, rgba(255,255,255,.68), transparent 62%);
+  transform: translateX(-40%) rotate(12deg);
+  opacity: .26;
+  pointer-events:none;
+}
+.tile:hover .ico{
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 18px 42px rgba(11,16,32,.16);
+}
+
+/* Badge */
+.badge{
+  margin-left: auto;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(11,16,32,.14);
+  color: rgba(11,16,32,.72);
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 10px 20px rgba(11,16,32,.08);
+  transform: translateY(-1px);
+}
+.badge.ok{
+  border-color: rgba(12,65,196,.22);
+  color: rgba(12,65,196,.92);
+  background: rgba(12,65,196,.08);
+}
+
+/* Text */
+.tileText{ margin-top: 2px; }
+.tTitle{
+  font-weight: 920;
+  font-size: var(--titleSize);
+  line-height: 1.15;
+  margin: 0;
+  letter-spacing: .15px;
+}
+.tSub{
+  margin: 6px 0 0;
+  font-size: var(--subSize);
+  color: var(--muted);
+  line-height: 1.2;
+  opacity: .88;
+}
+
+/* Pending state */
+.tile.pending{ filter: saturate(.92); }
+
+/* ==========================================================================
+   Gradientes por módulo (data-id)
+   Nota: tu Admin Hub usa: nomina, apertura, horario, documentos, reglamento, jornada
+========================================================================== */
+button[data-id="nomina"]{
+  background: linear-gradient(135deg, rgba(206,0,113,.14), rgba(255,255,255,.74));
+}
+button[data-id="apertura"]{
+  background: linear-gradient(135deg, rgba(104,13,191,.14), rgba(255,255,255,.74));
+}
+button[data-id="horario"]{
+  background: linear-gradient(135deg, rgba(12,65,196,.12), rgba(206,0,113,.08), rgba(255,255,255,.78));
+}
+button[data-id="documentos"]{
+  background: linear-gradient(135deg, rgba(12,65,196,.10), rgba(104,13,191,.10), rgba(255,255,255,.78));
+}
+button[data-id="reglamento"]{
+  background: linear-gradient(135deg, rgba(12,65,196,.10), rgba(255,255,255,.78));
+}
+button[data-id="jornada"]{
+  background: linear-gradient(135deg, rgba(12,65,196,.18), rgba(255,255,255,.72));
+}
+
+/* Mantengo compatibilidad con ids antiguos por si reutilizas el CSS */
+button[data-id="induccion"]{ background: linear-gradient(135deg, rgba(104,13,191,.16), rgba(255,255,255,.72)); }
+button[data-id="apuntes"]{ background: linear-gradient(135deg, rgba(206,0,113,.14), rgba(255,255,255,.72)); }
+button[data-id="observacion"]{ background: linear-gradient(135deg, rgba(12,65,196,.10), rgba(104,13,191,.10), rgba(255,255,255,.72)); }
+button[data-id="bitacora"]{ background: linear-gradient(135deg, rgba(104,13,191,.10), rgba(206,0,113,.10), rgba(255,255,255,.72)); }
+button[data-id="evaluacion"]{ background: linear-gradient(135deg, rgba(12,65,196,.10), rgba(255,255,255,.78)); }
+
+/* Icon tint por módulo (Admin) */
+button[data-id="nomina"] .ico{ background: rgba(206,0,113,.14); }
+button[data-id="apertura"] .ico{ background: rgba(104,13,191,.14); }
+button[data-id="horario"] .ico{ background: rgba(12,65,196,.12); }
+button[data-id="documentos"] .ico{ background: rgba(104,13,191,.10); }
+button[data-id="reglamento"] .ico{ background: rgba(12,65,196,.10); }
+button[data-id="jornada"] .ico{ background: rgba(12,65,196,.18); }
+
+/* ==========================================================================
+   DOCK (optional) — si algún día agregas .actions
+========================================================================== */
+.actions{
+  position: sticky;
+  bottom: 12px;
+  z-index: 45;
+  width: 100%;
+  padding: 10px;
+  background: rgba(255,255,255,.72);
+  border: 1px solid rgba(11,16,32,.10);
+  border-radius: 24px;
+  box-shadow: 0 18px 40px rgba(11,16,32,.12);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.actions .btnGhost{
+  width: 100%;
+  justify-content: center;
+}
+
+/* ==========================================================================
+   STAGGER ENTRY
+========================================================================== */
+@keyframes popIn{
+  from{ opacity: 0; transform: translateY(6px) scale(.992); }
+  to{ opacity: 1; transform: translateY(0) scale(1); }
+}
+.grid .tile{
+  opacity: 0;
+  animation: popIn 420ms var(--easeOut) forwards;
+}
+.grid .tile:nth-child(1){ animation-delay: 0ms; }
+.grid .tile:nth-child(2){ animation-delay: 40ms; }
+.grid .tile:nth-child(3){ animation-delay: 80ms; }
+.grid .tile:nth-child(4){ animation-delay: 120ms; }
+.grid .tile:nth-child(5){ animation-delay: 160ms; }
+.grid .tile:nth-child(6){ animation-delay: 200ms; }
+.grid .tile:nth-child(7){ animation-delay: 240ms; }
+.grid .tile:nth-child(8){ animation-delay: 280ms; }
+.grid .tile:nth-child(9){ animation-delay: 320ms; }
+.grid .tile:nth-child(n+10){ animation-delay: 360ms; }
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce){
+  .grid .tile{ opacity: 1; animation: none; }
+  .tile, .ico, .btnGoogle, .btnGhost, .toast{ transition: none !important; }
+}
+
+/* ==========================================================================
+   TOAST
+========================================================================== */
+.toast{
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%) translateY(12px);
+  opacity: 0;
+  pointer-events:none;
+
+  background: rgba(255,255,255,.94);
+  border: 1px solid rgba(11,16,32,.14);
+  box-shadow: var(--shadow);
+  border-radius: 999px;
+  padding: 10px 14px;
+
+  color: rgba(11,16,32,.85);
+  max-width: min(680px, calc(100vw - 24px));
+  text-align:center;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+
+  transition:
+    opacity 180ms var(--easeSoft),
+    transform 180ms var(--easeSoft);
+  z-index: 999;
+}
+.toast.show{
+  opacity: 1;
+  transform: translateX(-50%) translateY(0px);
+}
+.toastMsg{ display:inline-block; }
+.toastBtn{
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(11,16,32,.14);
+  background: rgba(255,255,255,.88);
+  cursor:pointer;
+  font-weight: 820;
+  color: rgba(11,16,32,.88);
+  transition:
+    transform var(--durFast) var(--easeSoft),
+    border-color var(--durFast) var(--easeSoft),
+    background var(--durFast) var(--easeSoft);
+  white-space: nowrap;
+}
+.toastBtn:hover{
+  border-color: rgba(12,65,196,.28);
+  background: rgba(255,255,255,.96);
+  transform: translateY(-1px);
+}
+.toastBtn:active{ transform: translateY(0px) scale(var(--tapScale)); }
+
+/* ==========================================================================
+   ACCESSIBILITY focus
+========================================================================== */
+:focus-visible{
+  box-shadow: var(--ring);
+  border-color: rgba(12,65,196,.28) !important;
+}
+.btnGhost:focus-visible{ box-shadow: var(--ring2); }
+.btnGoogle:focus-visible{ box-shadow: var(--ring); }
+
+/* ==========================================================================
+   SMALL HEIGHT tweaks
+========================================================================== */
+@media (max-height: 720px){
+  :root{
+    --gridGap: 12px;
+    --tilePad: 12px;
+  }
+  .grid{ padding-bottom: 100px; }
+}
