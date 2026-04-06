@@ -46,7 +46,10 @@ const HUB = {
     },
     "angiecamilar4@gmail.com": {
       label: "Camila Rodríguez",
-      links: { horario: "", documentos: "" }
+      links: {
+        horario: "https://musicala.github.io/horario2026camilarodriguez/",
+        documentos: "https://drive.google.com/drive/folders/1xkWt1c7A6fi9a7KPyXCNcbxMiH5QVIIC?usp=drive_link"
+      }
     },
     "licethrinconr@gmail.com": {
       label: "Liceth Rincón",
