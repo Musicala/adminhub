@@ -1,13 +1,10 @@
-/* Musicala · Admin Hub (SIMPLE + Firebase Google Login)
+/* Musicala Admin Hub
    - Login con Google (Firebase Auth)
-   - Hub exclusivo para Administrativos (lista blanca por correo)
-   - Links generales + links personalizados por usuario (Horario anual / Documentos)
+   - Hub exclusivo para administrativos
+   - Registro de jornada interno con lector QR + Firestore
 */
-const BUILD = "2026-02-16.4";
+const BUILD = "2026-05-07.1";
 
-/* ===========
-   1) Firebase Config (YA LISTO)
-=========== */
 const firebaseConfig = {
   apiKey: "AIzaSyCsXw0N_GkdwYMkdfZ_H2XIBNeTpGFn_rg",
   authDomain: "musicala-admin-hub.firebaseapp.com",
@@ -17,24 +14,16 @@ const firebaseConfig = {
   appId: "1:468927778540:web:619daeb67ff0287d92dfc9"
 };
 
-/* ===========
-   2) Config Admin Hub (solo esto)
-   - GENERAL_LINKS: le sale a TODOS los autorizados
-   - USERS: lista blanca por correo + links personalizados (ej: horario, documentos)
-=========== */
 const HUB = {
-  name: "Administrativos · Musicala",
-
-  // Links generales (para todos los admins autorizados)
-  // Dejamos “los otros” libres si no quieres ponerlos aún.
+  name: "Musicala Admin Hub",
+  subtitle: "Centro administrativo",
   GENERAL_LINKS: {
-    nomina:     "https://docs.google.com/forms/d/e/1FAIpQLSeMOhoY9d8JOf1Oq8DnD_aSEDkBmOXmzYJtlCCU-7CNVYjnLA/viewform", // 💰 Novedades nómina (general) -> pega URL
-    apertura:   "https://musicala.github.io/protocolodeapertura/", // 🔑 Protocolo de apertura (general) -> pega URL
-    reglamento: "https://drive.google.com/file/d/1Oda0c_FnHrsgME2GE8LCb7z5huH-YbBk/view", // 📜 Reglamento interno (general) -> pega URL
-    jornada:    "https://musicala.github.io/registrojornadaadmin/"  // ⏱️ Registro de jornada (general) -> pega URL
+    nomina: "https://docs.google.com/forms/d/e/1FAIpQLSeMOhoY9d8JOf1Oq8DnD_aSEDkBmOXmzYJtlCCU-7CNVYjnLA/viewform",
+    apertura: "https://musicala.github.io/protocolodeapertura/",
+    reglamento: "https://drive.google.com/file/d/1Oda0c_FnHrsgME2GE8LCb7z5huH-YbBk/view",
+    jornada: "__INTERNAL_SHIFT__",
+    registrosJornada: "__INTERNAL_RECORDS__"
   },
-
-  // Usuarios autorizados (TODOS Admin)
   USERS: {
     "alekcaballeromusic@gmail.com": {
       label: "Alek Caballero",
@@ -45,34 +34,37 @@ const HUB = {
       links: { horario: "", documentos: "" }
     },
     "angiecamilar4@gmail.com": {
-      label: "Camila Rodríguez",
-      links: {
-        horario: "https://musicala.github.io/horario2026camilarodriguez/",
-        documentos: "https://drive.google.com/drive/folders/1xkWt1c7A6fi9a7KPyXCNcbxMiH5QVIIC?usp=drive_link"
-      }
+      label: "Camila Rodriguez",
+      links: { horario: "", documentos: "" }
     },
     "licethrinconr@gmail.com": {
-      label: "Liceth Rincón",
+      label: "Liceth Rincon",
       links: {
         horario: "https://musicala.github.io/horario2026asistentecomercial/",
         documentos: "https://drive.google.com/drive/folders/1Xq_qn2gLNXQYuyVrxherSKvW7uNC8tnK?usp=sharing"
       }
     }
   },
-
   BUTTONS: [
-    { id: "nomina",     icon: "💰", title: "Novedades nómina", subtitle: "General" },
-    { id: "apertura",   icon: "🔑", title: "Protocolo de apertura", subtitle: "General" },
-    { id: "horario",    icon: "📅", title: "Horario anual", subtitle: "Personal" },
-    { id: "documentos", icon: "📁", title: "Documentos", subtitle: "Personal" },
-    { id: "reglamento", icon: "📜", title: "Reglamento interno de trabajo", subtitle: "General" },
-    { id: "jornada",    icon: "⏱️", title: "Registro de jornada", subtitle: "General" }
+    { id: "jornada", icon: "⏱️", title: "Registro de jornada", subtitle: "Sede QR o remoto", section: "Operacion diaria" },
+    { id: "registrosJornada", icon: "📊", title: "Llegadas registradas", subtitle: "Ver historial", section: "Operacion diaria" },
+    { id: "nomina", icon: "💰", title: "Novedades nomina", subtitle: "General", section: "Administracion" },
+    { id: "apertura", icon: "🔑", title: "Protocolo de apertura", subtitle: "General", section: "Administracion" },
+    { id: "horario", icon: "🗓️", title: "Horario anual", subtitle: "Personal", section: "Personal" },
+    { id: "documentos", icon: "📁", title: "Documentos", subtitle: "Personal", section: "Personal" },
+    { id: "reglamento", icon: "📜", title: "Reglamento interno de trabajo", subtitle: "General", section: "Administracion" }
   ]
 };
 
-/* ===========
-   3) Firebase SDK (CDN modular)
-=========== */
+const COLLECTIONS = {
+  shiftRecords: "adminShiftRecords"
+};
+
+const SHIFT = {
+  timezone: "America/Bogota",
+  role: "administrativo"
+};
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 import {
   getAuth,
@@ -85,152 +77,187 @@ import {
   setPersistence,
   browserLocalPersistence
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {
+  arrayUnion,
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-/* ===========
-   Helpers UI
-=========== */
 const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
+
+let AUTH = null;
+let DB = null;
+let ACTIVE_USER = null;
+let ACTIVE_EMAIL = "";
+let ACTIVE_PROFILE = null;
+let ACTIVE_LINKS = {};
+let toastTimer = null;
+let __deferredInstallPrompt = null;
+let qrReader = null;
+let currentCameraId = "";
+let submitLock = false;
 
 function escapeHtml(str) {
   return String(str ?? "")
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
 
-function pickToastEl() {
-  // En tu HTML tienes #toast en login y #toast-app en app. :contentReference[oaicite:1]{index=1}
-  const a = $("#toast-app");
-  const b = $("#toast");
-  if (a && !a.hidden) return a;
-  return b || a || null;
-}
-
-let toastTimer = null;
-/**
- * Toast con acción opcional.
- * toast("Mensaje", { actionText:"Actualizar", onAction:()=>{}, sticky:true, ms:5000 })
- */
 function toast(msg, opts = {}) {
-  const el = pickToastEl();
+  const el = ($("#toast-app") && !$("#toast-app").hidden) ? $("#toast-app") : ($("#toast") || $("#toast-app"));
   if (!el) return;
-
-  const { actionText = "", onAction = null, sticky = false, ms = 2600 } = opts || {};
-
+  const { actionText = "", onAction = null, sticky = false, ms = 2800 } = opts;
   el.classList.remove("show");
   el.hidden = false;
-  el.innerHTML = "";
-
-  const msgSpan = document.createElement("span");
-  msgSpan.className = "toastMsg";
-  msgSpan.textContent = String(msg ?? "");
-  el.appendChild(msgSpan);
-
+  el.innerHTML = `<span class="toastMsg">${escapeHtml(msg)}</span>`;
   if (actionText) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "toastBtn";
     btn.textContent = actionText;
     btn.addEventListener("click", () => {
-      try { onAction && onAction(); }
-      finally { el.classList.remove("show"); }
+      try { onAction?.(); } finally { el.classList.remove("show"); }
     });
     el.appendChild(btn);
   }
-
   requestAnimationFrame(() => el.classList.add("show"));
-
   clearTimeout(toastTimer);
   if (!sticky) {
     toastTimer = setTimeout(() => {
       el.classList.remove("show");
       if (el.id === "toast-app") el.hidden = true;
-    }, Math.max(1200, Number(ms) || 2600));
+    }, Math.max(1200, Number(ms) || 2800));
   }
 }
 
 function show(which) {
-  const vLogin = $("#view-login");
-  const vApp = $("#view-app");
-  if (!vLogin || !vApp) return;
+  const login = $("#view-login");
+  const app = $("#view-app");
+  if (!login || !app) return;
+  login.hidden = which !== "login";
+  app.hidden = which !== "app";
+  if (which === "login" && $("#toast-app")) $("#toast-app").hidden = true;
+}
 
-  if (which === "login") {
-    vLogin.hidden = false;
-    vApp.hidden = true;
-    const tApp = $("#toast-app");
-    if (tApp) tApp.hidden = true;
-  } else {
-    vLogin.hidden = true;
-    vApp.hidden = false;
+function emailKey(user) {
+  return String(user?.email || "").toLowerCase().trim();
+}
+
+function prettyName(user, fallbackEmail = "") {
+  return user?.displayName || fallbackEmail || "Sesion activa";
+}
+
+function buildLinksForUser(email) {
+  const base = { ...(HUB.GENERAL_LINKS || {}) };
+  const profile = HUB.USERS?.[email] || null;
+  return { ...base, ...(profile?.links || {}) };
+}
+
+function getProfileName() {
+  return ACTIVE_PROFILE?.label || prettyName(ACTIVE_USER, ACTIVE_EMAIL);
+}
+
+function getBogotaParts(date = new Date()) {
+  const dateFmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SHIFT.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const timeFmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: SHIFT.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+  return { date: dateFmt.format(date), time: timeFmt.format(date).slice(0, 5) };
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "-";
+  try {
+    return new Intl.DateTimeFormat("es-CO", {
+      timeZone: SHIFT.timezone,
+      dateStyle: "medium",
+      timeStyle: "short"
+    }).format(new Date(iso));
+  } catch (_) {
+    return iso;
   }
 }
 
-/* ===========
-   PWA: install + SW
-=========== */
-let __deferredInstallPrompt = null;
+function formatShiftMode(mode, source) {
+  if (mode === "presencial" && source === "qr") return "Presencial QR";
+  if (mode === "remoto" && source === "manual_remote") return "Remoto manual";
+  if (mode === "presencial") return "Presencial";
+  if (mode === "remoto") return "Remoto";
+  return "-";
+}
+
+function detectShiftType(rawText) {
+  const raw = String(rawText || "").toUpperCase();
+  if (raw.includes("SALIDA") || raw.includes("OUT") || raw.includes("CHECKOUT")) return "salida";
+  if (raw.includes("INGRESO") || raw.includes("ENTRADA") || raw.includes("IN") || raw.includes("CHECKIN")) return "ingreso";
+  return "";
+}
 
 function isIOS() {
-  const ua = navigator.userAgent || "";
-  return /iphone|ipad|ipod/i.test(ua);
+  return /iphone|ipad|ipod/i.test(navigator.userAgent || "");
 }
+
 function isStandalone() {
-  if (window.navigator.standalone) return true; // iOS Safari
-  return window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+  return Boolean(window.navigator.standalone) || window.matchMedia?.("(display-mode: standalone)").matches;
 }
 
 function setInstallUI(visible) {
-  const b1 = document.getElementById("btn-install");
-  const b2 = document.getElementById("btn-install-2");
-  if (b1) b1.hidden = !visible;
-  if (b2) b2.hidden = !visible;
+  ["btn-install", "btn-install-2"].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.hidden = !visible;
+  });
 }
 
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-
   const promptUpdate = (reg) => {
-    if (!reg || !reg.waiting) return;
-
-    toast("Hay una actualización lista ✨", {
+    if (!reg?.waiting) return;
+    toast("Hay una actualizacion lista", {
       actionText: "Actualizar",
       sticky: true,
-      onAction: () => {
-        try {
-          reg.waiting.postMessage({ type: "SKIP_WAITING" });
-        } catch (e) {
-          console.warn("No se pudo activar update", e);
-          toast("No se pudo actualizar, recarga la página 🙃");
-        }
-      }
+      onAction: () => reg.waiting.postMessage({ type: "SKIP_WAITING" })
     });
   };
-
   try {
     const reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" });
-
     promptUpdate(reg);
-
     reg.addEventListener("updatefound", () => {
       const sw = reg.installing;
-      if (!sw) return;
-
-      sw.addEventListener("statechange", () => {
-        if (sw.state === "installed" && navigator.serviceWorker.controller) {
-          promptUpdate(reg);
-        }
+      sw?.addEventListener("statechange", () => {
+        if (sw.state === "installed" && navigator.serviceWorker.controller) promptUpdate(reg);
       });
     });
-
     navigator.serviceWorker.addEventListener("controllerchange", () => {
       if (window.__reloadingForSW) return;
       window.__reloadingForSW = true;
       window.location.reload();
     });
-
     reg.update?.().catch(() => null);
-  } catch (e) {
-    console.warn("SW no se pudo registrar", e);
+  } catch (error) {
+    console.warn("SW no se pudo registrar", error);
   }
 }
 
@@ -239,249 +266,703 @@ function setupInstallPrompt() {
     setInstallUI(false);
     return;
   }
-
-  window.addEventListener("beforeinstallprompt", (e) => {
-    e.preventDefault();
-    __deferredInstallPrompt = e;
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    __deferredInstallPrompt = event;
     setInstallUI(true);
   });
-
   window.addEventListener("appinstalled", () => {
     __deferredInstallPrompt = null;
     setInstallUI(false);
-    toast("Instalada ✨");
+    toast("App instalada");
   });
-
   const onInstallClick = async () => {
     if (isIOS() && !__deferredInstallPrompt) {
-      toast("En iPhone/iPad: Compartir → “Agregar a pantalla de inicio”");
+      toast("En iPhone/iPad: Compartir > Agregar a pantalla de inicio");
       return;
     }
     if (!__deferredInstallPrompt) {
-      toast("Instalación no disponible todavía (abre en Chrome/Safari)");
+      toast("Instalacion no disponible todavia");
       return;
     }
-
     __deferredInstallPrompt.prompt();
-    const choice = await __deferredInstallPrompt.userChoice.catch(() => null);
+    await __deferredInstallPrompt.userChoice.catch(() => null);
     __deferredInstallPrompt = null;
-
-    if (!choice || choice.outcome !== "accepted") {
-      setInstallUI(false);
-      setTimeout(() => setInstallUI(true), 8000);
-      return;
-    }
   };
-
-  const b1 = document.getElementById("btn-install");
-  const b2 = document.getElementById("btn-install-2");
-  if (b1) b1.addEventListener("click", onInstallClick);
-  if (b2) b2.addEventListener("click", onInstallClick);
+  $("#btn-install")?.addEventListener("click", onInstallClick);
+  $("#btn-install-2")?.addEventListener("click", onInstallClick);
 }
 
-/* ===========
-   Render botones (dinámico)
-=========== */
-let ACTIVE_LINKS = {};
+function renderHero() {
+  let hero = $("#admin-hero");
+  if (hero) return;
+  const top = $(".top");
+  if (!top) return;
+  hero = document.createElement("section");
+  hero.id = "admin-hero";
+  hero.className = "workspaceHero";
+  hero.innerHTML = `
+    <div class="heroIntro">
+      <p class="heroEyebrow">Inicio de hoy</p>
+      <h3 class="heroTitle">Administracion Musicala</h3>
+      <p class="heroText">Marca jornada, revisa accesos administrativos y conserva los documentos clave en un solo lugar.</p>
+    </div>
+    <div class="heroFocus">
+      <div class="heroFocusLabel">Jornada</div>
+      <div class="heroFocusTitle" id="hero-shift-title">Marca tu jornada</div>
+      <p class="heroFocusText" id="hero-shift-subtitle">Escanea QR si estas en sede o marca manualmente si trabajas remoto.</p>
+      <div class="heroActions">
+        <button class="btnPrimary" type="button" data-hero-action="jornada">Marcar jornada</button>
+        <button class="btnGhost" type="button" data-hero-action="registrosJornada">Ver registros</button>
+      </div>
+    </div>
+  `;
+  top.insertAdjacentElement("afterend", hero);
+  hero.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-hero-action]");
+    if (btn) triggerAccess(btn.dataset.heroAction);
+  });
+}
 
 function renderButtons(buttons, links) {
   const grid = $("#grid");
   if (!grid) return;
-
   ACTIVE_LINKS = links || {};
-
-  grid.innerHTML = (buttons || []).map(b => {
-    const url = String(ACTIVE_LINKS[b.id] || "").trim();
-    const pending = !url;
-    const cls = pending ? "tile pending" : "tile";
-    const badge = pending
-      ? '<span class="badge">Pendiente</span>'
-      : '<span class="badge ok">Abrir</span>';
-
-    return `
-      <button class="${cls}" type="button" data-id="${escapeHtml(b.id)}" aria-label="${escapeHtml(b.title)}">
-        <div class="tileTop">
-          <div class="ico" aria-hidden="true">${escapeHtml(b.icon)}</div>
-          ${badge}
-        </div>
-        <div class="tileText">
-          <div class="tTitle">${escapeHtml(b.title)}</div>
-          <div class="tSub">${escapeHtml(b.subtitle)}</div>
-        </div>
-      </button>
-    `;
-  }).join("");
+  const sections = new Map();
+  for (const button of buttons || []) {
+    const section = button.section || "General";
+    if (!sections.has(section)) sections.set(section, []);
+    sections.get(section).push(button);
+  }
+  grid.innerHTML = Array.from(sections.entries()).map(([section, items]) => `
+    <div class="gridSection">
+      <div class="sectionTitle">${escapeHtml(section)}</div>
+      <div class="sectionGrid">
+        ${items.map((b) => {
+          const url = String(ACTIVE_LINKS[b.id] || "").trim();
+          const internal = url.startsWith("__INTERNAL_");
+          const pending = !url;
+          const badgeText = pending ? "Pendiente" : (internal ? "Abrir" : "Abrir");
+          return `
+            <button class="tile${pending ? " pending" : ""}" type="button" data-id="${escapeHtml(b.id)}" aria-label="${escapeHtml(b.title)}">
+              <div class="tileTop">
+                <div class="ico" aria-hidden="true">${escapeHtml(b.icon)}</div>
+                <span class="badge${pending ? "" : " ok"}">${badgeText}</span>
+              </div>
+              <div class="tileText">
+                <div class="tTitle">${escapeHtml(b.title)}</div>
+                <div class="tSub">${escapeHtml(b.subtitle)}</div>
+              </div>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `).join("");
 
   if (!grid.__boundClick) {
     grid.__boundClick = true;
-    grid.addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-id]");
-      if (!btn) return;
-
-      const id = btn.getAttribute("data-id");
-      const url = String(ACTIVE_LINKS[id] || "").trim();
-
-      if (!url) {
-        toast(`Pendiente: falta pegar el link de “${id}”`);
-        return;
-      }
-
-      // Asegura protocolo (evita links sin https://)
-      const safeUrl = /^(https?:)?\/\//i.test(url) ? url : ("https://" + url);
-
-      window.open(safeUrl, "_blank", "noopener,noreferrer");
-    }, { passive: true });
+    grid.addEventListener("click", (event) => {
+      const btn = event.target.closest("button[data-id]");
+      if (btn) triggerAccess(btn.getAttribute("data-id"));
+    });
   }
 }
 
-/* ===========
-   Auth
-=========== */
-function prettyName(user, fallbackEmail = "") {
-  const name = user?.displayName || "";
-  const email = user?.email || fallbackEmail || "";
-  return name ? name : (email ? email : "Sesión activa");
+function triggerAccess(id) {
+  const url = String(ACTIVE_LINKS[id] || "").trim();
+  if (id === "jornada" || url === "__INTERNAL_SHIFT__") {
+    openShiftModal();
+    return;
+  }
+  if (id === "registrosJornada" || url === "__INTERNAL_RECORDS__") {
+    openRecordsModal();
+    return;
+  }
+  if (!url) {
+    toast(`Pendiente: falta pegar el link de "${id}"`);
+    return;
+  }
+  const safeUrl = /^(https?:)?\/\//i.test(url) ? url : `https://${url}`;
+  window.open(safeUrl, "_blank", "noopener,noreferrer");
+}
+
+function ensureModal() {
+  let overlay = $("#modal-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "modal-overlay";
+    overlay.className = "drawerOverlay";
+    overlay.hidden = true;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", closeModal);
+  }
+  let modal = $("#modal-workspace");
+  if (!modal) {
+    modal = document.createElement("section");
+    modal.id = "modal-workspace";
+    modal.className = "modal modalWide";
+    modal.hidden = true;
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.innerHTML = `
+      <div class="modalCard workspaceModalCard">
+        <div class="modalHead workspaceHead">
+          <div>
+            <div class="modalEyebrow" id="workspace-eyebrow">Modulo interno</div>
+            <div class="modalTitle" id="workspace-title">Registro</div>
+            <p class="workspaceSub" id="workspace-subtitle"></p>
+          </div>
+          <button class="btnGhost" id="btn-workspace-close" type="button" aria-label="Cerrar">Cerrar</button>
+        </div>
+        <div class="modalBody workspaceBody">
+          <div id="workspace-content"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    $("#btn-workspace-close", modal)?.addEventListener("click", closeModal);
+  }
+  return modal;
+}
+
+async function closeModal() {
+  await stopQrScanner();
+  const modal = $("#modal-workspace");
+  const overlay = $("#modal-overlay");
+  if (modal) modal.hidden = true;
+  if (overlay) overlay.hidden = true;
+}
+
+function setModalCopy(title, subtitle, eyebrow = "Modulo interno") {
+  ensureModal();
+  $("#workspace-title").textContent = title;
+  $("#workspace-subtitle").textContent = subtitle;
+  $("#workspace-eyebrow").textContent = eyebrow;
+  $("#modal-overlay").hidden = false;
+  $("#modal-workspace").hidden = false;
+}
+
+function insecureContextMsg() {
+  return !window.isSecureContext
+    ? "La camara necesita HTTPS o localhost. En GitHub Pages funciona con HTTPS."
+    : "";
+}
+
+async function listVideoInputs() {
+  if (window.Html5Qrcode?.getCameras) {
+    const cams = await window.Html5Qrcode.getCameras();
+    return cams.map((cam) => ({ id: cam.id || cam.deviceId, label: cam.label || "Camara" }));
+  }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices.filter((d) => d.kind === "videoinput").map((d) => ({ id: d.deviceId, label: d.label || "Camara" }));
+}
+
+function pickBestCameraId(devices) {
+  const rear = devices.find((d) => /back|trasera|rear|environment/i.test(d.label || ""));
+  return (rear || devices[0] || {}).id || "";
+}
+
+async function populateCameras() {
+  const select = $("#cameraSelect");
+  const result = $("#shift-result");
+  if (!select) return;
+  const devices = await listVideoInputs();
+  select.innerHTML = "";
+  if (!devices.length) {
+    if (result) result.textContent = insecureContextMsg() || "No se detectaron camaras. Revisa permisos.";
+    return;
+  }
+  for (const [index, device] of devices.entries()) {
+    const opt = document.createElement("option");
+    opt.value = device.id;
+    opt.textContent = device.label || `Camara ${index + 1}`;
+    select.appendChild(opt);
+  }
+  currentCameraId = currentCameraId && devices.some((d) => d.id === currentCameraId)
+    ? currentCameraId
+    : pickBestCameraId(devices);
+  select.value = currentCameraId;
+}
+
+async function requestPermissionsAndRefresh() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    stream.getTracks().forEach((track) => track.stop());
+  } catch (_) {
+    const result = $("#shift-result");
+    if (result) result.textContent = insecureContextMsg() || "Concede permiso a la camara en el navegador.";
+  } finally {
+    await populateCameras();
+  }
+}
+
+async function openShiftModal() {
+  setModalCopy("Registro de jornada", "Escanea QR si estas en sede o marca manualmente si trabajas remoto.", "Operacion diaria");
+  $("#workspace-content").innerHTML = `
+    <section class="shiftTool">
+      <div class="shiftPerson">
+        <div class="shiftAvatar">${escapeHtml((getProfileName() || "A").slice(0, 1).toUpperCase())}</div>
+        <div>
+          <div class="shiftName">${escapeHtml(getProfileName())}</div>
+          <div class="shiftMail">${escapeHtml(ACTIVE_EMAIL)}</div>
+        </div>
+      </div>
+      <div class="shiftModeGrid">
+        <button id="btnOnSiteMode" class="shiftModeCard" type="button">
+          <span class="modeKicker">Jornada presencial</span>
+          <strong>Estoy en sede &middot; Escanear QR</strong>
+          <small>Escanear QR de ingreso o salida</small>
+        </button>
+        <button id="btnRemoteMode" class="shiftModeCard remote" type="button">
+          <span class="modeKicker">Jornada remota</span>
+          <strong>Estoy trabajando remoto</strong>
+          <small>Marcar inicio o cierre de jornada manualmente</small>
+        </button>
+      </div>
+      <div id="shift-mode-view"></div>
+      <div id="today-summary" class="summaryBox"></div>
+    </section>
+  `;
+  wireShiftModeControls();
+  await renderTodaySummary();
+}
+
+function wireShiftModeControls() {
+  $("#btnOnSiteMode")?.addEventListener("click", renderOnSiteShiftView);
+  $("#btnRemoteMode")?.addEventListener("click", async () => {
+    await stopQrScanner();
+    renderRemoteShiftView();
+  });
+}
+
+function renderOnSiteShiftView() {
+  const host = $("#shift-mode-view");
+  if (!host) return;
+  host.innerHTML = `
+    <section class="shiftModePanel">
+      <div class="modePanelHead">
+        <div>
+          <div class="panelTitle">Estoy en sede</div>
+          <p class="modePanelText">Escanea el QR fisico de ingreso o salida para registrar tu jornada presencial.</p>
+        </div>
+      </div>
+      <div class="qrControls">
+        <label class="field">
+          <span class="fieldLabel">Camara</span>
+          <select id="cameraSelect" class="input"></select>
+        </label>
+        <button id="btnPerms" class="btnGhost" type="button">Permitir/Actualizar</button>
+        <button id="btnFlip" class="btnGhost" type="button">Voltear</button>
+      </div>
+      <div class="qrActions">
+        <button id="btnStart" class="btnPrimary" type="button">Iniciar camara</button>
+        <button id="btnStop" class="btnGhost" type="button" disabled>Detener</button>
+      </div>
+      <div id="reader" class="reader"></div>
+      <div class="resultPanel">
+        <div class="panelTitle">Ultimo resultado</div>
+        <div id="shift-result" class="result">Aun sin leer...</div>
+      </div>
+    </section>
+  `;
+  wireShiftControls();
+  populateCameras().catch(() => {
+    $("#shift-result").textContent = insecureContextMsg() || "Error listando camaras.";
+  });
+}
+
+function renderRemoteShiftView() {
+  const now = new Date();
+  const parts = getBogotaParts(now);
+  const host = $("#shift-mode-view");
+  if (!host) return;
+  host.innerHTML = `
+    <section class="shiftModePanel remotePanel">
+      <div class="remoteInfoGrid">
+        <div><span>Nombre</span><strong>${escapeHtml(getProfileName())}</strong></div>
+        <div><span>Correo</span><strong>${escapeHtml(ACTIVE_EMAIL)}</strong></div>
+        <div><span>Fecha Bogota</span><strong>${escapeHtml(parts.date)}</strong></div>
+        <div><span>Hora Bogota</span><strong id="remote-current-time">${escapeHtml(parts.time)}</strong></div>
+      </div>
+      <div class="remoteActions">
+        <button id="btnRemoteIngreso" class="btnPrimary" type="button">Marcar ingreso remoto</button>
+        <button id="btnRemoteSalida" class="btnGhost" type="button">Marcar salida remota</button>
+      </div>
+      <p class="remoteResponsibility">Este registro se guarda bajo responsabilidad del trabajador.</p>
+      <div id="remote-result" class="result">Listo para marcar jornada remota.</div>
+    </section>
+  `;
+  $("#btnRemoteIngreso")?.addEventListener("click", () => markRemoteShift("ingreso"));
+  $("#btnRemoteSalida")?.addEventListener("click", () => markRemoteShift("salida"));
+}
+
+async function markRemoteShift(type) {
+  if (submitLock) return;
+  const actionText = type === "ingreso" ? "iniciando" : "cerrando";
+  const confirmed = confirm(`Confirmas que estas ${actionText} tu jornada remota en este momento?`);
+  if (!confirmed) return;
+  submitLock = true;
+  const result = $("#remote-result");
+  try {
+    const now = new Date();
+    const parts = getBogotaParts(now);
+    if (result) result.textContent = "Guardando registro remoto en Firebase...";
+    await saveShiftRecord({
+      type,
+      raw: "REMOTE_MANUAL",
+      mode: "remoto",
+      source: "manual_remote",
+      date: parts.date,
+      time: parts.time,
+      stamp: now.toISOString()
+    });
+    if (result) result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} remoto registrado: ${parts.date} ${parts.time}`;
+    toast("Jornada remota registrada");
+    renderRemoteShiftView();
+    await renderTodaySummary();
+  } catch (error) {
+    if (error?.message !== "cancelled") console.error(error);
+    if (result) result.textContent = error?.message === "cancelled" ? "No se reemplazo el registro existente." : "No se pudo guardar en Firebase.";
+  } finally {
+    submitLock = false;
+  }
+}
+
+function wireShiftControls() {
+  $("#cameraSelect")?.addEventListener("change", (event) => {
+    currentCameraId = event.target.value;
+  });
+  $("#btnPerms")?.addEventListener("click", requestPermissionsAndRefresh);
+  $("#btnStart")?.addEventListener("click", startQrScanner);
+  $("#btnStop")?.addEventListener("click", stopQrScanner);
+  $("#btnFlip")?.addEventListener("click", async () => {
+    const options = $$("#cameraSelect option").map((opt) => opt.value);
+    if (options.length < 2) {
+      $("#shift-result").textContent = "No hay mas camaras detectadas para alternar.";
+      return;
+    }
+    const nextId = options[(options.indexOf(currentCameraId) + 1) % options.length];
+    currentCameraId = nextId;
+    $("#cameraSelect").value = nextId;
+    if (qrReader?.isScanning) {
+      await stopQrScanner();
+      await startQrScanner();
+    }
+  });
+}
+
+async function startQrScanner() {
+  const result = $("#shift-result");
+  if (!window.Html5Qrcode) {
+    result.textContent = "No cargo la libreria de lectura QR. Revisa conexion.";
+    return;
+  }
+  try {
+    if (!currentCameraId) await populateCameras();
+    if (qrReader) await qrReader.stop().catch(() => null);
+    qrReader = new window.Html5Qrcode("reader");
+    try {
+      await qrReader.start(
+        { deviceId: { exact: currentCameraId } },
+        { fps: 10, qrbox: (vw, vh) => ({ width: Math.min(vw, vh) * 0.72, height: Math.min(vw, vh) * 0.72 }) },
+        onScanSuccess,
+        () => {}
+      );
+    } catch (_) {
+      await qrReader.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: (vw, vh) => ({ width: Math.min(vw, vh) * 0.72, height: Math.min(vw, vh) * 0.72 }) },
+        onScanSuccess,
+        () => {}
+      );
+    }
+    $("#btnStart").disabled = true;
+    $("#btnStop").disabled = false;
+    result.textContent = "Camara activa. Acerca el QR al recuadro.";
+  } catch (error) {
+    console.error(error);
+    result.textContent = insecureContextMsg() || "Error al acceder a la camara. Revisa permisos o cierra otras apps que la usen.";
+  }
+}
+
+async function stopQrScanner() {
+  if (!qrReader) return;
+  try {
+    if (qrReader.isScanning) await qrReader.stop();
+    await qrReader.clear();
+  } catch (_) {}
+  qrReader = null;
+  if ($("#btnStart")) $("#btnStart").disabled = false;
+  if ($("#btnStop")) $("#btnStop").disabled = true;
+}
+
+async function onScanSuccess(decodedText) {
+  if (submitLock) return;
+  submitLock = true;
+  const result = $("#shift-result");
+  try {
+    navigator.vibrate?.(20);
+    qrReader?.pause?.(true);
+    const type = detectShiftType(decodedText);
+    if (!type) {
+      result.textContent = `QR leido, pero no dice INGRESO ni SALIDA: ${decodedText}`;
+      return;
+    }
+    const now = new Date();
+    const parts = getBogotaParts(now);
+    result.textContent = `Leyendo ${type}... guardando en Firebase.`;
+    await saveShiftRecord({
+      type,
+      raw: decodedText,
+      mode: "presencial",
+      source: "qr",
+      date: parts.date,
+      time: parts.time,
+      stamp: now.toISOString()
+    });
+    result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} registrado: ${parts.date} ${parts.time}`;
+    toast("Jornada registrada");
+    await renderTodaySummary();
+  } catch (error) {
+    if (error?.message !== "cancelled") console.error(error);
+    result.textContent = error?.message === "cancelled"
+      ? "No se reemplazo el registro existente."
+      : "No se pudo guardar en Firebase. Revisa permisos/reglas de Firestore.";
+  } finally {
+    setTimeout(() => {
+      try { if (qrReader?.isScanning) qrReader.resume?.(); } catch (_) {}
+      submitLock = false;
+    }, 800);
+  }
+}
+
+async function saveShiftRecord(entry) {
+  if (!DB || !ACTIVE_EMAIL) throw new Error("Firestore no esta listo");
+  const docId = `${ACTIVE_EMAIL.replace(/[^a-z0-9]+/gi, "_")}_${entry.date}`;
+  const ref = doc(DB, COLLECTIONS.shiftRecords, docId);
+  const existingSnap = await getDoc(ref);
+  const existing = existingSnap.exists() ? existingSnap.data() : null;
+  const existingTime = existing?.[`${entry.type}Time`];
+  if (existingTime) {
+    const replace = confirm(`Ya existe un ${entry.type} registrado hoy a las ${existingTime}. ¿Quieres reemplazarlo?`);
+    if (!replace) throw new Error("cancelled");
+  }
+  const mode = entry.mode || "presencial";
+  const source = entry.source || "qr";
+  const clientCreatedAt = new Date().toISOString();
+  const base = {
+    role: SHIFT.role,
+    email: ACTIVE_EMAIL,
+    name: getProfileName(),
+    date: entry.date,
+    updatedAt: serverTimestamp(),
+    updatedAtClient: Date.now()
+  };
+  const typed = {
+    [`${entry.type}Time`]: entry.time,
+    [`${entry.type}Stamp`]: entry.stamp,
+    [`${entry.type}Raw`]: entry.raw,
+    [`${entry.type}ByUid`]: ACTIVE_USER?.uid || "",
+    [`${entry.type}Mode`]: mode,
+    [`${entry.type}Source`]: source
+  };
+  const event = {
+    type: entry.type,
+    mode,
+    source,
+    time: entry.time,
+    stamp: entry.stamp,
+    uid: ACTIVE_USER?.uid || "",
+    email: ACTIVE_EMAIL,
+    name: getProfileName(),
+    raw: entry.raw,
+    clientCreatedAt,
+    clientCreatedAtMs: Date.now()
+  };
+  await setDoc(ref, {
+    ...base,
+    ...typed,
+    events: arrayUnion(event),
+    createdAt: serverTimestamp(),
+    createdAtClient: Date.now()
+  }, { merge: true });
+}
+
+async function getShiftRecords({ mineOnly = true, max = 60 } = {}) {
+  if (!DB) return [];
+  const clauses = [collection(DB, COLLECTIONS.shiftRecords), orderBy("date", "desc"), limit(max)];
+  if (mineOnly && ACTIVE_EMAIL) clauses.splice(1, 0, where("email", "==", ACTIVE_EMAIL));
+  const snap = await getDocs(query(...clauses));
+  return snap.docs.map((item) => ({ id: item.id, ...item.data() }));
+}
+
+async function renderTodaySummary() {
+  const host = $("#today-summary");
+  if (!host) return;
+  const { date } = getBogotaParts();
+  let records = [];
+  try {
+    records = await getShiftRecords({ mineOnly: true, max: 10 });
+  } catch (error) {
+    console.warn(error);
+  }
+  const today = records.find((record) => record.date === date);
+  const ingresoMode = formatShiftMode(today?.ingresoMode, today?.ingresoSource);
+  const salidaMode = formatShiftMode(today?.salidaMode, today?.salidaSource);
+  host.innerHTML = `
+    <div class="summaryTitle">Resumen de hoy</div>
+    <div class="recordTable compact">
+      <div class="recordRow head"><div>Fecha</div><div>Ingreso</div><div>Salida</div></div>
+      <div class="recordRow"><div>${escapeHtml(date)}</div><div>${escapeHtml(today?.ingresoTime || "-")}<small>${escapeHtml(ingresoMode)}</small></div><div>${escapeHtml(today?.salidaTime || "-")}<small>${escapeHtml(salidaMode)}</small></div></div>
+    </div>
+  `;
+}
+
+async function openRecordsModal() {
+  setModalCopy("Llegadas registradas", "Historial guardado en Firebase. Por defecto ves tus marcajes recientes.", "Consulta");
+  $("#workspace-content").innerHTML = `
+    <section class="recordsTool">
+      <div class="recordsToolbar">
+        <button class="btnPrimary" id="btn-my-records" type="button">Mis registros</button>
+        <button class="btnGhost" id="btn-all-records" type="button">Equipo</button>
+      </div>
+      <div id="records-list" class="recordsList">Cargando...</div>
+    </section>
+  `;
+  $("#btn-my-records")?.addEventListener("click", () => renderRecords(true));
+  $("#btn-all-records")?.addEventListener("click", () => renderRecords(false));
+  await renderRecords(true);
+}
+
+async function renderRecords(mineOnly) {
+  const host = $("#records-list");
+  if (!host) return;
+  host.textContent = "Cargando...";
+  try {
+    const records = await getShiftRecords({ mineOnly, max: 80 });
+    if (!records.length) {
+      host.innerHTML = `<div class="emptyState">Aun no hay registros para mostrar.</div>`;
+      return;
+    }
+    host.innerHTML = `
+      <div class="recordTable">
+        <div class="recordRow head">
+          <div>Fecha</div><div>Nombre</div><div>Ingreso</div><div>Salida</div>
+        </div>
+        ${records.map((record) => `
+          <div class="recordRow">
+            <div>${escapeHtml(record.date || "-")}</div>
+            <div>
+              <strong>${escapeHtml(record.name || "-")}</strong>
+              <small>${escapeHtml(record.email || "")}</small>
+            </div>
+            <div>${escapeHtml(record.ingresoTime || "-")}<small>${escapeHtml(formatShiftMode(record.ingresoMode, record.ingresoSource))}</small><small>${escapeHtml(formatDateTime(record.ingresoStamp))}</small></div>
+            <div>${escapeHtml(record.salidaTime || "-")}<small>${escapeHtml(formatShiftMode(record.salidaMode, record.salidaSource))}</small><small>${escapeHtml(formatDateTime(record.salidaStamp))}</small></div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  } catch (error) {
+    console.error(error);
+    host.innerHTML = `<div class="emptyState">No se pudieron leer los registros. Revisa reglas de Firestore e indices.</div>`;
+  }
 }
 
 function friendlyAuthError(code = "") {
-  if (code === "auth/unauthorized-domain") return "Dominio no autorizado en Firebase Auth (Authorized domains).";
-  if (code === "auth/popup-blocked") return "El navegador bloqueó el popup. En modo app instalada usamos redirect.";
-  if (code === "auth/cancelled-popup-request") return "Se canceló el popup de inicio de sesión.";
+  if (code === "auth/unauthorized-domain") return "Dominio no autorizado en Firebase Auth.";
+  if (code === "auth/popup-blocked") return "El navegador bloqueo el popup.";
   if (code === "auth/popup-closed-by-user") return "Cerraste el login.";
-  if (code === "auth/network-request-failed") return "Falló la red. Revisa internet.";
+  if (code === "auth/network-request-failed") return "Fallo la red.";
   return "";
 }
 
 async function doGoogleLogin(auth) {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
-
   try {
     await setPersistence(auth, browserLocalPersistence);
-
     if (isStandalone()) {
       await signInWithRedirect(auth, provider);
-      return;
+    } else {
+      await signInWithPopup(auth, provider);
     }
-    await signInWithPopup(auth, provider);
-  } catch (err) {
-    const code = err?.code || "";
-    if (code === "auth/popup-closed-by-user") return;
-
-    const friendly = friendlyAuthError(code);
-    toast(friendly ? `No se pudo iniciar sesión: ${friendly}` : "No se pudo iniciar sesión");
-    console.error("Login error:", err);
+  } catch (error) {
+    if (error?.code === "auth/popup-closed-by-user") return;
+    const friendly = friendlyAuthError(error?.code || "");
+    toast(friendly ? `No se pudo iniciar sesion: ${friendly}` : "No se pudo iniciar sesion");
+    console.error(error);
   }
-}
-
-async function doLogout(auth) {
-  try {
-    await signOut(auth);
-  } catch (err) {
-    toast("No se pudo cerrar sesión");
-    console.error(err);
-  }
-}
-
-/* ===========
-   Boot
-=========== */
-function assertConfig(cfg) {
-  const bad = !cfg || !cfg.apiKey || !cfg.authDomain || !cfg.projectId || !cfg.appId;
-  if (!bad) return true;
-  console.warn("Firebase config incompleto. Revisa firebaseConfig en app.js");
-  return false;
 }
 
 async function finalizeRedirectIfAny(auth) {
   try {
-    const res = await getRedirectResult(auth);
-    if (res?.user) {
-      console.log("Redirect login OK:", res.user.email || res.user.uid);
-    }
-  } catch (err) {
-    const code = err?.code || "";
-    if (code) {
-      const friendly = friendlyAuthError(code);
-      toast(friendly ? `Login redirect falló: ${friendly}` : "Login redirect falló");
-      console.warn("Redirect result error:", err);
-    }
+    await getRedirectResult(auth);
+  } catch (error) {
+    const friendly = friendlyAuthError(error?.code || "");
+    toast(friendly ? `Login redirect fallo: ${friendly}` : "Login redirect fallo");
   }
 }
 
-function emailKey(user) {
-  return String(user?.email || "").toLowerCase().trim();
+function assertConfig(cfg) {
+  return Boolean(cfg?.apiKey && cfg?.authDomain && cfg?.projectId && cfg?.appId);
 }
 
-function hasUserRestrictions() {
-  return HUB.USERS && Object.keys(HUB.USERS).length > 0;
-}
-
-function buildLinksForUser(email) {
-  const base = { ...(HUB.GENERAL_LINKS || {}) };
-  const prof = HUB.USERS?.[email] || null;
-  const overrides = prof?.links || {};
-  return { ...base, ...overrides };
+function setHubCopy() {
+  document.title = HUB.name;
+  $(".brandTitle") && ($(".brandTitle").textContent = "Musicala");
+  $(".brandSub") && ($(".brandSub").textContent = HUB.subtitle);
+  $(".appTitle") && ($(".appTitle").textContent = HUB.name);
 }
 
 async function mount() {
-  try { document.title = "Musicala · Admin Hub"; } catch (_) {}
-
+  setHubCopy();
   if (!assertConfig(firebaseConfig)) {
     show("login");
     toast("Falta configurar Firebase en app.js");
     return;
   }
-
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
-
-  try {
-    await setPersistence(auth, browserLocalPersistence);
-  } catch (e) {
-    console.warn("No se pudo setPersistence:", e);
-  }
-
+  const db = getFirestore(app);
+  AUTH = auth;
+  DB = db;
+  await setPersistence(auth, browserLocalPersistence).catch(() => null);
   await finalizeRedirectIfAny(auth);
 
-  const btnGoogle = $("#btn-google");
-  const btnOut = $("#btn-logout");
-  const userLine = $("#user-line");
-
-  if (btnGoogle) btnGoogle.addEventListener("click", () => doGoogleLogin(auth));
-  if (btnOut) btnOut.addEventListener("click", () => doLogout(auth));
+  $("#btn-google")?.addEventListener("click", () => doGoogleLogin(auth));
+  $("#btn-logout")?.addEventListener("click", () => signOut(auth).catch(() => toast("No se pudo cerrar sesion")));
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) {
+      ACTIVE_USER = null;
+      ACTIVE_EMAIL = "";
+      ACTIVE_PROFILE = null;
+      ACTIVE_LINKS = {};
+      await closeModal();
       show("login");
       return;
     }
-
     const email = emailKey(user);
-
-    // Lista blanca: si hay restricciones y tu correo no está, chao.
-    if (hasUserRestrictions() && !HUB.USERS[email]) {
-      toast("Tu correo no está autorizado para este hub 🫠");
-      try { await signOut(auth); } catch (_) {}
+    if (HUB.USERS && Object.keys(HUB.USERS).length && !HUB.USERS[email]) {
+      toast("Tu correo no esta autorizado para este hub");
+      await signOut(auth).catch(() => null);
       show("login");
       return;
     }
-
-    const profile = HUB.USERS?.[email] || null;
-    const mergedLinks = buildLinksForUser(email);
-
-    if (userLine) {
-      userLine.textContent = profile?.label || prettyName(user, email);
-    }
-
+    ACTIVE_USER = user;
+    ACTIVE_EMAIL = email;
+    ACTIVE_PROFILE = HUB.USERS?.[email] || null;
+    ACTIVE_LINKS = buildLinksForUser(email);
+    $("#user-line") && ($("#user-line").textContent = getProfileName());
     show("app");
-    renderButtons(HUB.BUTTONS || [], mergedLinks);
+    renderHero();
+    renderButtons(HUB.BUTTONS, ACTIVE_LINKS);
   });
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   console.log("BUILD", BUILD);
-
   registerServiceWorker();
   setupInstallPrompt();
   mount();

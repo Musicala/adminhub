@@ -432,11 +432,112 @@ body{
 ========================================================================== */
 .grid{
   display:grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: var(--gridGap);
   padding: 10px var(--padX) 120px;
   margin: 0;
   align-content: start;
+}
+
+.workspaceHero{
+  margin: 2px var(--padX) 12px;
+  display:grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(11,16,32,.10);
+  border-radius: 28px;
+  background: rgba(255,255,255,.68);
+  box-shadow: 0 18px 46px rgba(11,16,32,.10);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.heroEyebrow,
+.heroFocusLabel,
+.sectionTitle,
+.modalEyebrow,
+.panelTitle,
+.summaryTitle{
+  margin: 0 0 8px;
+  color: rgba(12,65,196,.86);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.heroTitle{
+  margin: 0;
+  font-size: clamp(24px, 4vw, 42px);
+  line-height: 1.02;
+  font-weight: 950;
+}
+
+.heroText,
+.heroFocusText,
+.workspaceSub{
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.heroFocus{
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: linear-gradient(135deg, rgba(12,65,196,.12), rgba(255,255,255,.78));
+  box-shadow: 0 12px 30px rgba(11,16,32,.08);
+}
+
+.heroFocusTitle{
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.heroActions,
+.qrActions,
+.recordsToolbar{
+  display:flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.btnPrimary{
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 13px;
+  color: #fff;
+  background: linear-gradient(90deg, var(--a1), var(--a2) 52%, var(--a3));
+  box-shadow: 0 12px 26px rgba(12,65,196,.18);
+  cursor:pointer;
+  font-weight: 850;
+}
+
+.btnPrimary:disabled,
+.btnGhost:disabled{
+  opacity: .58;
+  cursor:not-allowed;
+}
+
+.gridSection{
+  display:grid;
+  gap: 9px;
+}
+
+.sectionTitle{
+  padding: 0 2px;
+  margin-bottom: 0;
+}
+
+.sectionGrid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gridGap);
 }
 
 /* Tiny screens 1 col */
@@ -599,6 +700,9 @@ button[data-id="reglamento"]{
 button[data-id="jornada"]{
   background: linear-gradient(135deg, rgba(12,65,196,.18), rgba(255,255,255,.72));
 }
+button[data-id="registrosJornada"]{
+  background: linear-gradient(135deg, rgba(104,13,191,.14), rgba(206,0,113,.08), rgba(255,255,255,.76));
+}
 
 /* Mantengo compatibilidad con ids antiguos por si reutilizas el CSS */
 button[data-id="induccion"]{ background: linear-gradient(135deg, rgba(104,13,191,.16), rgba(255,255,255,.72)); }
@@ -614,6 +718,7 @@ button[data-id="horario"] .ico{ background: rgba(12,65,196,.12); }
 button[data-id="documentos"] .ico{ background: rgba(104,13,191,.10); }
 button[data-id="reglamento"] .ico{ background: rgba(12,65,196,.10); }
 button[data-id="jornada"] .ico{ background: rgba(12,65,196,.18); }
+button[data-id="registrosJornada"] .ico{ background: rgba(104,13,191,.14); }
 
 /* ==========================================================================
    DOCK (optional) — si algún día agregas .actions
@@ -723,6 +828,332 @@ button[data-id="jornada"] .ico{ background: rgba(12,65,196,.18); }
 .toastBtn:active{ transform: translateY(0px) scale(var(--tapScale)); }
 
 /* ==========================================================================
+   INTERNAL MODULES: QR + FIRESTORE RECORDS
+========================================================================== */
+.drawerOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: 880;
+  background: rgba(11,16,32,.34);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.modal{
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display:grid;
+  place-items:center;
+  padding: 16px;
+  pointer-events:none;
+}
+
+.modal[hidden],
+.drawerOverlay[hidden]{ display:none; }
+
+.modalCard{
+  width: min(940px, 100%);
+  max-height: min(760px, calc(100vh - 32px));
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  border-radius: 26px;
+  border: 1px solid rgba(11,16,32,.12);
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 28px 80px rgba(11,16,32,.24);
+  pointer-events:auto;
+}
+
+.modalHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 14px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(11,16,32,.10);
+}
+
+.modalTitle{
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1.08;
+}
+
+.modalBody{
+  padding: 16px;
+  overflow:auto;
+}
+
+.shiftTool,
+.recordsTool{
+  display:grid;
+  gap: 14px;
+}
+
+.shiftPerson{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: linear-gradient(135deg, rgba(12,65,196,.08), rgba(255,255,255,.88));
+}
+
+.shiftAvatar{
+  width: 44px;
+  height: 44px;
+  display:grid;
+  place-items:center;
+  border-radius: 16px;
+  color:#fff;
+  background: linear-gradient(135deg, var(--a1), var(--a2), var(--a3));
+  font-weight: 950;
+}
+
+.shiftName{
+  font-weight: 950;
+}
+
+.shiftMail{
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.shiftModeGrid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.shiftModeCard{
+  width: 100%;
+  min-height: 136px;
+  display:flex;
+  flex-direction:column;
+  justify-content:flex-end;
+  gap: 7px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: linear-gradient(135deg, rgba(12,65,196,.13), rgba(255,255,255,.88));
+  box-shadow: 0 14px 34px rgba(11,16,32,.10);
+  cursor:pointer;
+  text-align:left;
+  color: var(--text);
+  transition:
+    transform var(--durFast) var(--easeSoft),
+    border-color var(--durFast) var(--easeSoft),
+    box-shadow var(--durFast) var(--easeSoft);
+}
+
+.shiftModeCard.remote{
+  background: linear-gradient(135deg, rgba(206,0,113,.10), rgba(104,13,191,.08), rgba(255,255,255,.90));
+}
+
+.shiftModeCard:hover{
+  transform: translateY(-2px);
+  border-color: rgba(12,65,196,.22);
+  box-shadow: 0 20px 46px rgba(11,16,32,.13);
+}
+
+.shiftModeCard:active{ transform: translateY(0) scale(var(--tapScale)); }
+
+.shiftModeCard strong{
+  font-size: 18px;
+  line-height: 1.12;
+  font-weight: 950;
+}
+
+.shiftModeCard small,
+.modePanelText,
+.remoteResponsibility{
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.modeKicker{
+  color: rgba(12,65,196,.86);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.shiftModePanel{
+  display:grid;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: rgba(255,255,255,.66);
+}
+
+.modePanelText{
+  margin: -3px 0 0;
+  font-size: 13px;
+}
+
+.remoteInfoGrid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.remoteInfoGrid div{
+  min-width: 0;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(11,16,32,.09);
+  background: rgba(255,255,255,.76);
+}
+
+.remoteInfoGrid span{
+  display:block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.remoteInfoGrid strong{
+  display:block;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap:anywhere;
+}
+
+.remoteActions{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.remoteActions .btnPrimary,
+.remoteActions .btnGhost{
+  width: 100%;
+}
+
+.remoteResponsibility{
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(12,65,196,.24);
+  background: rgba(255,255,255,.72);
+  font-size: 13px;
+}
+
+.qrControls{
+  display:grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items:end;
+}
+
+.fieldLabel{
+  display:block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.input,
+.field select{
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 13px;
+  border: 1px solid rgba(11,16,32,.14);
+  background: rgba(255,255,255,.92);
+  color: var(--text);
+}
+
+.reader{
+  width: 100%;
+  min-height: 330px;
+  overflow:hidden;
+  border-radius: 18px;
+  border: 1px solid rgba(11,16,32,.12);
+  background: #fff;
+}
+
+.resultPanel,
+.summaryBox{
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: rgba(255,255,255,.76);
+}
+
+.result{
+  min-height: 46px;
+  display:flex;
+  align-items:center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(12,65,196,.26);
+  background: rgba(255,255,255,.82);
+  color: rgba(11,16,32,.82);
+}
+
+.recordTable{
+  display:grid;
+  min-width: 620px;
+  border: 1px solid rgba(11,16,32,.10);
+  border-radius: 16px;
+  overflow:hidden;
+}
+
+.recordTable.compact{
+  min-width: 0;
+}
+
+.recordRow{
+  display:grid;
+  grid-template-columns: 120px minmax(180px, 1fr) 120px 120px;
+  gap: 10px;
+  padding: 10px 12px;
+  align-items:center;
+  border-top: 1px solid rgba(11,16,32,.08);
+  background: rgba(255,255,255,.62);
+}
+
+.recordTable.compact .recordRow{
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.recordRow.head{
+  border-top:0;
+  color: var(--muted);
+  background: rgba(12,65,196,.06);
+  font-weight: 950;
+}
+
+.recordRow small{
+  display:block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.recordsList{
+  overflow:auto;
+}
+
+.emptyState{
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px dashed rgba(11,16,32,.16);
+  color: var(--muted);
+  background: rgba(255,255,255,.62);
+}
+
+/* ==========================================================================
    ACCESSIBILITY focus
 ========================================================================== */
 :focus-visible{
@@ -741,4 +1172,53 @@ button[data-id="jornada"] .ico{ background: rgba(12,65,196,.18); }
     --tilePad: 12px;
   }
   .grid{ padding-bottom: 100px; }
+}
+
+@media (max-width: 760px){
+  .workspaceHero{
+    grid-template-columns: 1fr;
+    border-radius: 24px;
+  }
+  .sectionGrid{
+    grid-template-columns: 1fr;
+  }
+  .shiftModeGrid,
+  .remoteInfoGrid,
+  .remoteActions{
+    grid-template-columns: 1fr;
+  }
+  .qrControls{
+    grid-template-columns: 1fr;
+  }
+  .qrActions,
+  .recordsToolbar,
+  .heroActions{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .qrActions .btnPrimary,
+  .qrActions .btnGhost,
+  .recordsToolbar .btnPrimary,
+  .recordsToolbar .btnGhost,
+  .heroActions .btnPrimary,
+  .heroActions .btnGhost{
+    width: 100%;
+  }
+  .modal{
+    align-items:end;
+    padding: 8px;
+  }
+  .modalCard{
+    max-height: calc(100vh - 16px);
+    border-radius: 22px;
+  }
+  .reader{
+    min-height: 280px;
+  }
+  .recordTable{
+    min-width: 560px;
+  }
+  .recordTable.compact{
+    min-width: 0;
+  }
 }
