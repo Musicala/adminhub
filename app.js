@@ -3,7 +3,7 @@
    - Hub exclusivo para administrativos
    - Registro de jornada interno con lector QR + Firestore
 */
-const BUILD = "2026-05-07.1";
+const BUILD = "2026-05-08.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCsXw0N_GkdwYMkdfZ_H2XIBNeTpGFn_rg",
@@ -34,7 +34,7 @@ const HUB = {
       links: { horario: "", documentos: "" }
     },
     "angiecamilar4@gmail.com": {
-      label: "Camila Rodriguez",
+      label: "Angie Camila Rodriguez",
       links: { horario: "", documentos: "" }
     },
     "licethrinconr@gmail.com": {
@@ -63,6 +63,22 @@ const COLLECTIONS = {
 const SHIFT = {
   timezone: "America/Bogota",
   role: "administrativo"
+};
+
+const REMOTE_WORK_ALLOWED_USERS = [
+  "angiecamilar4@gmail.com",
+  "Angie Camila Rodriguez"
+];
+
+const USER_RESOURCE_LINKS = {
+  "angiecamilar4@gmail.com": {
+    horario: "https://musicala.github.io/horario2026camilarodriguez/",
+    documentos: "https://drive.google.com/drive/folders/1xkWt1c7A6fi9a7KPyXCNcbxMiH5QVIIC?usp=drive_link"
+  },
+  "angie camila rodriguez": {
+    horario: "https://musicala.github.io/horario2026camilarodriguez/",
+    documentos: "https://drive.google.com/drive/folders/1xkWt1c7A6fi9a7KPyXCNcbxMiH5QVIIC?usp=drive_link"
+  }
 };
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
@@ -157,18 +173,57 @@ function emailKey(user) {
   return String(user?.email || "").toLowerCase().trim();
 }
 
+function normalizeIdentity(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9@._+\-\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function prettyName(user, fallbackEmail = "") {
   return user?.displayName || fallbackEmail || "Sesion activa";
+}
+
+function getUserResourceLinks(email, profile) {
+  const candidates = [
+    email,
+    normalizeIdentity(email),
+    normalizeIdentity(profile?.label),
+    normalizeIdentity(prettyName(ACTIVE_USER, email))
+  ].filter(Boolean);
+  for (const key of candidates) {
+    const links = USER_RESOURCE_LINKS[key] || USER_RESOURCE_LINKS[normalizeIdentity(key)];
+    if (links) return links;
+  }
+  return {};
 }
 
 function buildLinksForUser(email) {
   const base = { ...(HUB.GENERAL_LINKS || {}) };
   const profile = HUB.USERS?.[email] || null;
-  return { ...base, ...(profile?.links || {}) };
+  return { ...base, ...(profile?.links || {}), ...getUserResourceLinks(email, profile) };
 }
 
 function getProfileName() {
   return ACTIVE_PROFILE?.label || prettyName(ACTIVE_USER, ACTIVE_EMAIL);
+}
+
+function canCurrentUserMarkRemote() {
+  const current = [
+    ACTIVE_EMAIL,
+    getProfileName(),
+    ACTIVE_USER?.displayName
+  ].map(normalizeIdentity).filter(Boolean);
+  return REMOTE_WORK_ALLOWED_USERS
+    .map(normalizeIdentity)
+    .some((allowed) => current.includes(allowed));
+}
+
+function remoteNotAllowedMessage() {
+  return "La marcacion remota no esta habilitada para tu usuario. Por favor marca tu ingreso desde sede.";
 }
 
 function getBogotaParts(date = new Date()) {
@@ -310,7 +365,7 @@ function renderHero() {
     <div class="heroFocus">
       <div class="heroFocusLabel">Jornada</div>
       <div class="heroFocusTitle" id="hero-shift-title">Marca tu jornada</div>
-      <p class="heroFocusText" id="hero-shift-subtitle">Escanea QR si estas en sede o marca manualmente si trabajas remoto.</p>
+      <p class="heroFocusText" id="hero-shift-subtitle">${canCurrentUserMarkRemote() ? "Escanea QR si estas en sede o marca manualmente si trabajas remoto." : "Escanea el QR en sede para registrar tu ingreso o salida."}</p>
       <div class="heroActions">
         <button class="btnPrimary" type="button" data-hero-action="jornada">Marcar jornada</button>
         <button class="btnGhost" type="button" data-hero-action="registrosJornada">Ver registros</button>
@@ -498,7 +553,12 @@ async function requestPermissionsAndRefresh() {
 }
 
 async function openShiftModal() {
-  setModalCopy("Registro de jornada", "Escanea QR si estas en sede o marca manualmente si trabajas remoto.", "Operacion diaria");
+  const remoteAllowed = canCurrentUserMarkRemote();
+  setModalCopy(
+    "Registro de jornada",
+    remoteAllowed ? "Escanea QR si estas en sede o marca manualmente si trabajas remoto." : "Para este usuario la jornada se marca desde sede con QR.",
+    "Operacion diaria"
+  );
   $("#workspace-content").innerHTML = `
     <section class="shiftTool">
       <div class="shiftPerson">
@@ -508,16 +568,16 @@ async function openShiftModal() {
           <div class="shiftMail">${escapeHtml(ACTIVE_EMAIL)}</div>
         </div>
       </div>
-      <div class="shiftModeGrid">
+      <div class="shiftModeGrid${remoteAllowed ? "" : " single"}">
         <button id="btnOnSiteMode" class="shiftModeCard" type="button">
           <span class="modeKicker">Jornada presencial</span>
           <strong>Estoy en sede &middot; Escanear QR</strong>
           <small>Escanear QR de ingreso o salida</small>
         </button>
-        <button id="btnRemoteMode" class="shiftModeCard remote" type="button">
+        <button id="btnRemoteMode" class="shiftModeCard remote${remoteAllowed ? "" : " locked"}" type="button" aria-disabled="${remoteAllowed ? "false" : "true"}">
           <span class="modeKicker">Jornada remota</span>
           <strong>Estoy trabajando remoto</strong>
-          <small>Marcar inicio o cierre de jornada manualmente</small>
+          <small>${remoteAllowed ? "Marcar inicio o cierre de jornada manualmente" : "Disponible solo para usuarios autorizados"}</small>
         </button>
       </div>
       <div id="shift-mode-view"></div>
@@ -531,6 +591,11 @@ async function openShiftModal() {
 function wireShiftModeControls() {
   $("#btnOnSiteMode")?.addEventListener("click", renderOnSiteShiftView);
   $("#btnRemoteMode")?.addEventListener("click", async () => {
+    if (!canCurrentUserMarkRemote()) {
+      toast(remoteNotAllowedMessage(), { ms: 4200 });
+      renderOnSiteShiftView();
+      return;
+    }
     await stopQrScanner();
     renderRemoteShiftView();
   });
@@ -573,6 +638,11 @@ function renderOnSiteShiftView() {
 }
 
 function renderRemoteShiftView() {
+  if (!canCurrentUserMarkRemote()) {
+    toast(remoteNotAllowedMessage(), { ms: 4200 });
+    renderOnSiteShiftView();
+    return;
+  }
   const now = new Date();
   const parts = getBogotaParts(now);
   const host = $("#shift-mode-view");
@@ -599,6 +669,10 @@ function renderRemoteShiftView() {
 
 async function markRemoteShift(type) {
   if (submitLock) return;
+  if (!canCurrentUserMarkRemote()) {
+    toast(remoteNotAllowedMessage(), { ms: 4200 });
+    return;
+  }
   const actionText = type === "ingreso" ? "iniciando" : "cerrando";
   const confirmed = confirm(`Confirmas que estas ${actionText} tu jornada remota en este momento?`);
   if (!confirmed) return;
@@ -623,7 +697,11 @@ async function markRemoteShift(type) {
     await renderTodaySummary();
   } catch (error) {
     if (error?.message !== "cancelled") console.error(error);
-    if (result) result.textContent = error?.message === "cancelled" ? "No se reemplazo el registro existente." : "No se pudo guardar en Firebase.";
+    if (result) {
+      result.textContent = error?.message === "cancelled"
+        ? "No se reemplazo el registro existente."
+        : (error?.message === "remote_not_allowed" ? remoteNotAllowedMessage() : "No se pudo guardar en Firebase.");
+    }
   } finally {
     submitLock = false;
   }
@@ -739,6 +817,9 @@ async function onScanSuccess(decodedText) {
 
 async function saveShiftRecord(entry) {
   if (!DB || !ACTIVE_EMAIL) throw new Error("Firestore no esta listo");
+  if ((entry.mode === "remoto" || entry.source === "manual_remote") && !canCurrentUserMarkRemote()) {
+    throw new Error("remote_not_allowed");
+  }
   const docId = `${ACTIVE_EMAIL.replace(/[^a-z0-9]+/gi, "_")}_${entry.date}`;
   const ref = doc(DB, COLLECTIONS.shiftRecords, docId);
   const existingSnap = await getDoc(ref);
@@ -750,12 +831,14 @@ async function saveShiftRecord(entry) {
   }
   const mode = entry.mode || "presencial";
   const source = entry.source || "qr";
+  const modalidad = mode === "presencial" ? "sede" : mode;
   const clientCreatedAt = new Date().toISOString();
   const base = {
     role: SHIFT.role,
     email: ACTIVE_EMAIL,
     name: getProfileName(),
     date: entry.date,
+    modalidad,
     updatedAt: serverTimestamp(),
     updatedAtClient: Date.now()
   };
@@ -765,11 +848,13 @@ async function saveShiftRecord(entry) {
     [`${entry.type}Raw`]: entry.raw,
     [`${entry.type}ByUid`]: ACTIVE_USER?.uid || "",
     [`${entry.type}Mode`]: mode,
-    [`${entry.type}Source`]: source
+    [`${entry.type}Source`]: source,
+    [`${entry.type}Modalidad`]: modalidad
   };
   const event = {
     type: entry.type,
     mode,
+    modalidad,
     source,
     time: entry.time,
     stamp: entry.stamp,

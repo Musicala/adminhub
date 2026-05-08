@@ -1222,3 +1222,293 @@ button[data-id="registrosJornada"] .ico{ background: rgba(104,13,191,.14); }
     min-width: 0;
   }
 }
+
+@media (max-width: 600px){
+  :root{
+    --padX: 10px;
+    --padY: 10px;
+    --gridGap: 10px;
+    --tilePad: 12px;
+    --tileRadius: 18px;
+    --iconCardSize: 38px;
+    --iconCardRadius: 13px;
+    --titleSize: 13.5px;
+    --subSize: 11.5px;
+  }
+
+  html,
+  body{
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .appRoot{
+    padding: 8px;
+    overflow-x: hidden;
+  }
+
+  .screen{
+    border-radius: 20px;
+    overflow-x: hidden;
+  }
+
+  .wrap{
+    padding-top: 10px;
+  }
+
+  .top{
+    padding: 8px var(--padX) 8px;
+  }
+
+  .brand{
+    gap: 9px;
+    padding: 10px;
+    border-radius: 18px;
+  }
+
+  .logoWrap{
+    width: 38px;
+    height: 38px;
+    border-radius: 13px;
+    flex: 0 0 auto;
+  }
+
+  .brandCopy{
+    min-width: 0;
+  }
+
+  .appTitle{
+    max-width: 100%;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #user-line{
+    max-width: 44vw;
+    font-size: 11.5px;
+  }
+
+  .brandActions{
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  .btnGhost,
+  .btnPrimary{
+    min-height: 40px;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 12px;
+    white-space: nowrap;
+    line-height: 1;
+  }
+
+  .brandActions .btnGhost{
+    min-width: 58px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .workspaceHero{
+    margin: 0 var(--padX) 10px;
+    padding: 12px;
+    gap: 10px;
+    border-radius: 20px;
+  }
+
+  .heroTitle{
+    font-size: 24px;
+  }
+
+  .heroText,
+  .heroFocusText,
+  .workspaceSub{
+    font-size: 12.5px;
+    line-height: 1.35;
+  }
+
+  .heroFocus{
+    padding: 12px;
+    border-radius: 17px;
+  }
+
+  .heroFocusTitle{
+    font-size: 17px;
+  }
+
+  .heroActions,
+  .qrActions,
+  .recordsToolbar,
+  .remoteActions{
+    gap: 8px;
+  }
+
+  .heroActions{
+    grid-template-columns: 1fr;
+  }
+
+  .grid{
+    gap: 12px;
+    padding: 8px var(--padX) 90px;
+  }
+
+  .gridSection{
+    gap: 7px;
+  }
+
+  .sectionGrid{
+    gap: 10px;
+  }
+
+  .tile{
+    min-height: 96px;
+    padding: 12px;
+    border-radius: 18px;
+    box-shadow: 0 10px 24px rgba(11,16,32,.08);
+  }
+
+  .tileTop{
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .ico{
+    font-size: 18px;
+  }
+
+  .badge{
+    padding: 5px 8px;
+    font-size: 10.5px;
+  }
+
+  .tTitle{
+    line-height: 1.18;
+  }
+
+  .tSub{
+    margin-top: 4px;
+  }
+
+  .modal{
+    padding: 6px;
+  }
+
+  .modalHead{
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .modalTitle{
+    font-size: 19px;
+  }
+
+  .modalBody{
+    padding: 12px;
+  }
+
+  .shiftPerson,
+  .shiftModePanel{
+    padding: 10px;
+    border-radius: 16px;
+  }
+
+  .shiftAvatar{
+    width: 38px;
+    height: 38px;
+    border-radius: 13px;
+  }
+
+  .shiftName{
+    font-size: 14px;
+  }
+
+  .shiftModeGrid,
+  .shiftModeGrid.single{
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .shiftModeCard{
+    min-height: 106px;
+    padding: 13px;
+    border-radius: 17px;
+  }
+
+  .shiftModeCard:disabled,
+  .shiftModeCard.locked{
+    opacity: .62;
+    cursor: pointer;
+    filter: saturate(.75);
+  }
+
+  .shiftModeCard strong{
+    font-size: 16px;
+  }
+
+  .remoteInfoGrid div{
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .remoteActions,
+  .qrActions,
+  .recordsToolbar{
+    grid-template-columns: 1fr;
+  }
+
+  .reader{
+    min-height: 230px;
+  }
+
+  .recordTable{
+    min-width: 520px;
+  }
+
+  .recordTable.compact{
+    min-width: 0;
+  }
+}
+
+@media (max-width: 380px){
+  .appRoot{
+    padding: 6px;
+  }
+
+  .brand{
+    padding: 9px;
+  }
+
+  .logoWrap{
+    width: 34px;
+    height: 34px;
+  }
+
+  .appTitle{
+    font-size: 13px;
+  }
+
+  #user-line{
+    max-width: 38vw;
+    font-size: 11px;
+  }
+
+  .brandActions .btnGhost{
+    min-width: 52px;
+    padding: 0 8px;
+  }
+
+  .workspaceHero{
+    padding: 10px;
+  }
+
+  .heroTitle{
+    font-size: 21px;
+  }
+
+  .tile{
+    min-height: 90px;
+  }
+}
