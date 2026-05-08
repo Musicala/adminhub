@@ -4,7 +4,7 @@
    - Navegación: network-first con fallback offline a index.html
    - Assets same-origin: stale-while-revalidate
 */
-const BUILD = "2026-05-08.1";
+const BUILD = "2026-05-08.2";
 const VERSION = "v3-" + BUILD;
 const CACHE_STATIC = `practicantes-static-${VERSION}`;
 const CACHE_RUNTIME = `practicantes-runtime-${VERSION}`;

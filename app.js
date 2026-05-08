@@ -3,7 +3,7 @@
    - Hub exclusivo para administrativos
    - Registro de jornada interno con lector QR + Firestore
 */
-const BUILD = "2026-05-08.1";
+const BUILD = "2026-05-08.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCsXw0N_GkdwYMkdfZ_H2XIBNeTpGFn_rg",
@@ -223,7 +223,7 @@ function canCurrentUserMarkRemote() {
 }
 
 function remoteNotAllowedMessage() {
-  return "La marcacion remota no esta habilitada para tu usuario. Por favor marca tu ingreso desde sede.";
+  return "La marcacion desde casa no esta habilitada para tu usuario. Por favor marca tu ingreso en la sede con el codigo QR.";
 }
 
 function getBogotaParts(date = new Date()) {
@@ -266,8 +266,8 @@ function formatShiftMode(mode, source) {
 
 function detectShiftType(rawText) {
   const raw = String(rawText || "").toUpperCase();
-  if (raw.includes("SALIDA") || raw.includes("OUT") || raw.includes("CHECKOUT")) return "salida";
-  if (raw.includes("INGRESO") || raw.includes("ENTRADA") || raw.includes("IN") || raw.includes("CHECKIN")) return "ingreso";
+  if (raw.includes("SALIDA") || raw.includes("ADM-SALIDA") || raw.includes("OUT") || raw.includes("CHECKOUT")) return "salida";
+  if (raw.includes("LLEGADA") || raw.includes("ADM-LLEGADA") || raw.includes("INGRESO") || raw.includes("ENTRADA") || raw.includes("IN") || raw.includes("CHECKIN")) return "ingreso";
   return "";
 }
 
@@ -627,7 +627,7 @@ function renderOnSiteShiftView() {
       <div id="reader" class="reader"></div>
       <div class="resultPanel">
         <div class="panelTitle">Ultimo resultado</div>
-        <div id="shift-result" class="result">Aun sin leer...</div>
+        <div id="shift-result" class="result">Apunta la camara al codigo QR de la sede.</div>
       </div>
     </section>
   `;
@@ -681,7 +681,7 @@ async function markRemoteShift(type) {
   try {
     const now = new Date();
     const parts = getBogotaParts(now);
-    if (result) result.textContent = "Guardando registro remoto en Firebase...";
+    if (result) result.textContent = "Guardando tu marcacion...";
     await saveShiftRecord({
       type,
       raw: "REMOTE_MANUAL",
@@ -700,7 +700,7 @@ async function markRemoteShift(type) {
     if (result) {
       result.textContent = error?.message === "cancelled"
         ? "No se reemplazo el registro existente."
-        : (error?.message === "remote_not_allowed" ? remoteNotAllowedMessage() : "No se pudo guardar en Firebase.");
+        : (error?.message === "remote_not_allowed" ? remoteNotAllowedMessage() : "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.");
     }
   } finally {
     submitLock = false;
@@ -717,7 +717,7 @@ function wireShiftControls() {
   $("#btnFlip")?.addEventListener("click", async () => {
     const options = $$("#cameraSelect option").map((opt) => opt.value);
     if (options.length < 2) {
-      $("#shift-result").textContent = "No hay mas camaras detectadas para alternar.";
+      $("#shift-result").textContent = "No encontramos otra camara disponible en este dispositivo.";
       return;
     }
     const nextId = options[(options.indexOf(currentCameraId) + 1) % options.length];
@@ -733,7 +733,7 @@ function wireShiftControls() {
 async function startQrScanner() {
   const result = $("#shift-result");
   if (!window.Html5Qrcode) {
-    result.textContent = "No cargo la libreria de lectura QR. Revisa conexion.";
+    result.textContent = "No se pudo abrir el lector de QR. Revisa tu conexion a internet e intenta de nuevo.";
     return;
   }
   try {
@@ -757,10 +757,10 @@ async function startQrScanner() {
     }
     $("#btnStart").disabled = true;
     $("#btnStop").disabled = false;
-    result.textContent = "Camara activa. Acerca el QR al recuadro.";
+    result.textContent = "Camara activa. Acerca el codigo QR al recuadro.";
   } catch (error) {
     console.error(error);
-    result.textContent = insecureContextMsg() || "Error al acceder a la camara. Revisa permisos o cierra otras apps que la usen.";
+    result.textContent = insecureContextMsg() || "No pudimos abrir la camara. Revisa el permiso de camara o cierra otras apps que la esten usando.";
   }
 }
 
@@ -784,12 +784,12 @@ async function onScanSuccess(decodedText) {
     qrReader?.pause?.(true);
     const type = detectShiftType(decodedText);
     if (!type) {
-      result.textContent = `QR leido, pero no dice INGRESO ni SALIDA: ${decodedText}`;
+      result.textContent = "Este codigo QR no corresponde a la marcacion de jornada. Por favor usa el QR de entrada o salida de la sede.";
       return;
     }
     const now = new Date();
     const parts = getBogotaParts(now);
-    result.textContent = `Leyendo ${type}... guardando en Firebase.`;
+    result.textContent = `Registrando ${type === "ingreso" ? "tu ingreso" : "tu salida"}...`;
     await saveShiftRecord({
       type,
       raw: decodedText,
@@ -806,7 +806,7 @@ async function onScanSuccess(decodedText) {
     if (error?.message !== "cancelled") console.error(error);
     result.textContent = error?.message === "cancelled"
       ? "No se reemplazo el registro existente."
-      : "No se pudo guardar en Firebase. Revisa permisos/reglas de Firestore.";
+      : "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.";
   } finally {
     setTimeout(() => {
       try { if (qrReader?.isScanning) qrReader.resume?.(); } catch (_) {}
@@ -816,7 +816,7 @@ async function onScanSuccess(decodedText) {
 }
 
 async function saveShiftRecord(entry) {
-  if (!DB || !ACTIVE_EMAIL) throw new Error("Firestore no esta listo");
+  if (!DB || !ACTIVE_EMAIL) throw new Error("service_not_ready");
   if ((entry.mode === "remoto" || entry.source === "manual_remote") && !canCurrentUserMarkRemote()) {
     throw new Error("remote_not_allowed");
   }
@@ -905,7 +905,7 @@ async function renderTodaySummary() {
 }
 
 async function openRecordsModal() {
-  setModalCopy("Llegadas registradas", "Historial guardado en Firebase. Por defecto ves tus marcajes recientes.", "Consulta");
+  setModalCopy("Llegadas registradas", "Aqui puedes revisar tus marcaciones recientes.", "Consulta");
   $("#workspace-content").innerHTML = `
     <section class="recordsTool">
       <div class="recordsToolbar">
@@ -950,7 +950,7 @@ async function renderRecords(mineOnly) {
     `;
   } catch (error) {
     console.error(error);
-    host.innerHTML = `<div class="emptyState">No se pudieron leer los registros. Revisa reglas de Firestore e indices.</div>`;
+    host.innerHTML = `<div class="emptyState">No se pudieron cargar los registros. Revisa tu conexion e intenta de nuevo.</div>`;
   }
 }
 
