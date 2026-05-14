@@ -3,7 +3,7 @@
    - Hub exclusivo para administrativos
    - Registro de jornada interno con lector QR + Firestore
 */
-const BUILD = "2026-05-08.2";
+const BUILD = "2026-05-14.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCsXw0N_GkdwYMkdfZ_H2XIBNeTpGFn_rg",
@@ -123,6 +123,8 @@ let __deferredInstallPrompt = null;
 let qrReader = null;
 let currentCameraId = "";
 let submitLock = false;
+let loginLock = false;
+let lastQrSaveOkAt = 0;
 
 function escapeHtml(str) {
   return String(str ?? "")
@@ -290,20 +292,25 @@ async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   const promptUpdate = (reg) => {
     if (!reg?.waiting) return;
-    toast("Hay una actualizacion lista", {
-      actionText: "Actualizar",
-      sticky: true,
-      onAction: () => reg.waiting.postMessage({ type: "SKIP_WAITING" })
-    });
+    reg.waiting.postMessage({ type: "SKIP_WAITING" });
   };
   try {
-    const reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" });
+    const swUrl = `./sw.js?v=${encodeURIComponent(BUILD)}`;
+    const reg = await navigator.serviceWorker.register(swUrl, {
+      scope: "./",
+      updateViaCache: "none"
+    });
     promptUpdate(reg);
     reg.addEventListener("updatefound", () => {
       const sw = reg.installing;
       sw?.addEventListener("statechange", () => {
         if (sw.state === "installed" && navigator.serviceWorker.controller) promptUpdate(reg);
       });
+    });
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "SW_ACTIVATED") {
+        console.log("SW_ACTIVATED", event.data.version);
+      }
     });
     navigator.serviceWorker.addEventListener("controllerchange", () => {
       if (window.__reloadingForSW) return;
@@ -312,7 +319,28 @@ async function registerServiceWorker() {
     });
     reg.update?.().catch(() => null);
   } catch (error) {
-    console.warn("SW no se pudo registrar", error);
+    console.warn("No se pudo preparar la app para uso sin conexion", error);
+  }
+}
+
+async function clearLocalAppCacheAndReload() {
+  try {
+    toast("Actualizando app y limpiando cache...", { sticky: true });
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.allSettled(regs.map((reg) => reg.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.allSettled(keys.map((key) => caches.delete(key)));
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("v", BUILD);
+    url.searchParams.set("fresh", Date.now().toString());
+    window.location.replace(url.toString());
+  } catch (error) {
+    console.error(error);
+    window.location.reload();
   }
 }
 
@@ -667,6 +695,19 @@ function renderRemoteShiftView() {
   $("#btnRemoteSalida")?.addEventListener("click", () => markRemoteShift("salida"));
 }
 
+
+function friendlySaveError(error) {
+  if (error?.message === "cancelled") return "No se reemplazo el registro existente.";
+  if (error?.message === "remote_not_allowed") return remoteNotAllowedMessage();
+  if (error?.code === "permission-denied") {
+    return "No se pudo guardar: este correo no tiene permiso de escritura en Firestore. Revisa que el correo autorizado sea exactamente el mismo con el que se inicio sesion.";
+  }
+  if (error?.code === "unavailable" || error?.code === "deadline-exceeded") {
+    return "No se pudo guardar por conexion inestable. Intenta de nuevo cuando el celular tenga buena señal.";
+  }
+  return "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.";
+}
+
 async function markRemoteShift(type) {
   if (submitLock) return;
   if (!canCurrentUserMarkRemote()) {
@@ -697,11 +738,7 @@ async function markRemoteShift(type) {
     await renderTodaySummary();
   } catch (error) {
     if (error?.message !== "cancelled") console.error(error);
-    if (result) {
-      result.textContent = error?.message === "cancelled"
-        ? "No se reemplazo el registro existente."
-        : (error?.message === "remote_not_allowed" ? remoteNotAllowedMessage() : "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.");
-    }
+    if (result) result.textContent = friendlySaveError(error);
   } finally {
     submitLock = false;
   }
@@ -778,6 +815,7 @@ async function stopQrScanner() {
 async function onScanSuccess(decodedText) {
   if (submitLock) return;
   submitLock = true;
+  let savedOk = false;
   const result = $("#shift-result");
   try {
     navigator.vibrate?.(20);
@@ -789,6 +827,11 @@ async function onScanSuccess(decodedText) {
     }
     const now = new Date();
     const parts = getBogotaParts(now);
+    const secondsSinceLastOk = (Date.now() - lastQrSaveOkAt) / 1000;
+    if (secondsSinceLastOk < 8) {
+      result.textContent = "Ya acabamos de guardar una marcacion. Espera unos segundos antes de escanear otra vez.";
+      return;
+    }
     result.textContent = `Registrando ${type === "ingreso" ? "tu ingreso" : "tu salida"}...`;
     await saveShiftRecord({
       type,
@@ -799,19 +842,24 @@ async function onScanSuccess(decodedText) {
       time: parts.time,
       stamp: now.toISOString()
     });
-    result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} registrado: ${parts.date} ${parts.time}`;
+    savedOk = true;
+    lastQrSaveOkAt = Date.now();
+    result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} registrado: ${parts.date} ${parts.time}. Camara detenida para evitar registros duplicados.`;
     toast("Jornada registrada");
+    await stopQrScanner();
     await renderTodaySummary();
   } catch (error) {
     if (error?.message !== "cancelled") console.error(error);
-    result.textContent = error?.message === "cancelled"
-      ? "No se reemplazo el registro existente."
-      : "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.";
+    result.textContent = friendlySaveError(error);
   } finally {
-    setTimeout(() => {
-      try { if (qrReader?.isScanning) qrReader.resume?.(); } catch (_) {}
+    if (!savedOk) {
+      setTimeout(() => {
+        try { if (qrReader?.isScanning) qrReader.resume?.(); } catch (_) {}
+        submitLock = false;
+      }, 900);
+    } else {
       submitLock = false;
-    }, 800);
+    }
   }
 }
 
@@ -820,7 +868,8 @@ async function saveShiftRecord(entry) {
   if ((entry.mode === "remoto" || entry.source === "manual_remote") && !canCurrentUserMarkRemote()) {
     throw new Error("remote_not_allowed");
   }
-  const docId = `${ACTIVE_EMAIL.replace(/[^a-z0-9]+/gi, "_")}_${entry.date}`;
+  const safeEmailId = ACTIVE_EMAIL.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
+  const docId = `${safeEmailId}_${entry.date}`;
   const ref = doc(DB, COLLECTIONS.shiftRecords, docId);
   const existingSnap = await getDoc(ref);
   const existing = existingSnap.exists() ? existingSnap.data() : null;
@@ -840,7 +889,8 @@ async function saveShiftRecord(entry) {
     date: entry.date,
     modalidad,
     updatedAt: serverTimestamp(),
-    updatedAtClient: Date.now()
+    updatedAtClient: Date.now(),
+    appBuild: BUILD
   };
   const typed = {
     [`${entry.type}Time`]: entry.time,
@@ -862,16 +912,24 @@ async function saveShiftRecord(entry) {
     email: ACTIVE_EMAIL,
     name: getProfileName(),
     raw: entry.raw,
+    appBuild: BUILD,
     clientCreatedAt,
     clientCreatedAtMs: Date.now()
   };
-  await setDoc(ref, {
+  const payload = {
     ...base,
     ...typed,
-    events: arrayUnion(event),
-    createdAt: serverTimestamp(),
-    createdAtClient: Date.now()
-  }, { merge: true });
+    events: arrayUnion(event)
+  };
+  if (existingSnap.exists()) {
+    await updateDoc(ref, payload);
+  } else {
+    await setDoc(ref, {
+      ...payload,
+      createdAt: serverTimestamp(),
+      createdAtClient: Date.now()
+    });
+  }
 }
 
 async function getShiftRecords({ mineOnly = true, max = 60 } = {}) {
@@ -955,28 +1013,50 @@ async function renderRecords(mineOnly) {
 }
 
 function friendlyAuthError(code = "") {
-  if (code === "auth/unauthorized-domain") return "Dominio no autorizado en Firebase Auth.";
-  if (code === "auth/popup-blocked") return "El navegador bloqueo el popup.";
+  if (code === "auth/unauthorized-domain") return "Esta direccion de la app no esta habilitada para iniciar sesion.";
+  if (code === "auth/popup-blocked") return "El navegador bloqueo la ventana de Google.";
   if (code === "auth/popup-closed-by-user") return "Cerraste el login.";
   if (code === "auth/network-request-failed") return "Fallo la red.";
   return "";
 }
 
 async function doGoogleLogin(auth) {
+  if (loginLock) return;
+  loginLock = true;
+  const btn = $("#btn-google");
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
   try {
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.originalHtml = btn.innerHTML;
+      btn.textContent = "Abriendo Google...";
+    }
     await setPersistence(auth, browserLocalPersistence);
-    if (isStandalone()) {
-      await signInWithRedirect(auth, provider);
-    } else {
+    try {
       await signInWithPopup(auth, provider);
+    } catch (popupError) {
+      if (popupError?.code === "auth/popup-closed-by-user") return;
+      const shouldTryRedirect = [
+        "auth/popup-blocked",
+        "auth/cancelled-popup-request",
+        "auth/operation-not-supported-in-this-environment"
+      ].includes(popupError?.code);
+      if (!shouldTryRedirect && !isStandalone()) throw popupError;
+      toast("Te vamos a llevar a Google para iniciar sesion.", { ms: 2400 });
+      await signInWithRedirect(auth, provider);
     }
   } catch (error) {
     if (error?.code === "auth/popup-closed-by-user") return;
     const friendly = friendlyAuthError(error?.code || "");
     toast(friendly ? `No se pudo iniciar sesion: ${friendly}` : "No se pudo iniciar sesion");
     console.error(error);
+  } finally {
+    loginLock = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = btn.dataset.originalHtml || `<span class="gIcon" aria-hidden="true">G</span> Entrar con Google`;
+    }
   }
 }
 
@@ -985,7 +1065,7 @@ async function finalizeRedirectIfAny(auth) {
     await getRedirectResult(auth);
   } catch (error) {
     const friendly = friendlyAuthError(error?.code || "");
-    toast(friendly ? `Login redirect fallo: ${friendly}` : "Login redirect fallo");
+    toast(friendly ? `No se pudo completar el inicio de sesion: ${friendly}` : "No se pudo completar el inicio de sesion");
   }
 }
 
@@ -1004,7 +1084,7 @@ async function mount() {
   setHubCopy();
   if (!assertConfig(firebaseConfig)) {
     show("login");
-    toast("Falta configurar Firebase en app.js");
+    toast("No se pudo cargar la configuracion de la app. Intenta mas tarde.");
     return;
   }
   const app = initializeApp(firebaseConfig);
@@ -1016,7 +1096,16 @@ async function mount() {
   await finalizeRedirectIfAny(auth);
 
   $("#btn-google")?.addEventListener("click", () => doGoogleLogin(auth));
-  $("#btn-logout")?.addEventListener("click", () => signOut(auth).catch(() => toast("No se pudo cerrar sesion")));
+  $("#btn-refresh-app")?.addEventListener("click", clearLocalAppCacheAndReload);
+  $("#btn-logout")?.addEventListener("click", async () => {
+    try {
+      await signOut(auth);
+      show("login");
+      toast("Sesion cerrada");
+    } catch (_) {
+      toast("No se pudo cerrar sesion. Intenta de nuevo.");
+    }
+  });
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) {
@@ -1039,7 +1128,7 @@ async function mount() {
     ACTIVE_EMAIL = email;
     ACTIVE_PROFILE = HUB.USERS?.[email] || null;
     ACTIVE_LINKS = buildLinksForUser(email);
-    $("#user-line") && ($("#user-line").textContent = getProfileName());
+    $("#user-line") && ($("#user-line").textContent = `${getProfileName()} · v${BUILD}`);
     show("app");
     renderHero();
     renderButtons(HUB.BUTTONS, ACTIVE_LINKS);
