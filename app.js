@@ -3,7 +3,7 @@
    - Hub exclusivo para administrativos
    - Registro de jornada interno con lector QR + Firestore
 */
-const BUILD = "2026-05-14.1";
+const BUILD = "2026-05-14.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCsXw0N_GkdwYMkdfZ_H2XIBNeTpGFn_rg",
@@ -266,10 +266,29 @@ function formatShiftMode(mode, source) {
   return "-";
 }
 
+function normalizeQrText(rawText) {
+  return String(rawText || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function detectShiftType(rawText) {
-  const raw = String(rawText || "").toUpperCase();
-  if (raw.includes("SALIDA") || raw.includes("ADM-SALIDA") || raw.includes("OUT") || raw.includes("CHECKOUT")) return "salida";
-  if (raw.includes("LLEGADA") || raw.includes("ADM-LLEGADA") || raw.includes("INGRESO") || raw.includes("ENTRADA") || raw.includes("IN") || raw.includes("CHECKIN")) return "ingreso";
+  const raw = normalizeQrText(rawText);
+  const compact = raw.replace(/\s+/g, "");
+
+  // Acepta variaciones antiguas/nuevas del QR: ADM-LLEGADA, ADM LLEGADA, INGRESO, ENTRADA, etc.
+  if (raw.includes("SALIDA") || compact.includes("ADMSALIDA") || raw.includes("CHECK OUT") || compact.includes("CHECKOUT") || /(^|\W)OUT($|\W)/.test(raw)) {
+    return "salida";
+  }
+
+  if (raw.includes("LLEGADA") || raw.includes("INGRESO") || raw.includes("ENTRADA") || compact.includes("ADMLLEGADA") || compact.includes("ADMINGRESO") || raw.includes("CHECK IN") || compact.includes("CHECKIN")) {
+    return "ingreso";
+  }
+
   return "";
 }
 

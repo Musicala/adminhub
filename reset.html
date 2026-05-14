@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Actualizar Musicala Admin Hub</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111827; background: #f8fafc; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { width: min(520px, 100%); background: white; border: 1px solid #e5e7eb; border-radius: 28px; box-shadow: 0 24px 60px rgba(15, 23, 42, .12); padding: 28px; }
+    h1 { margin: 0 0 10px; font-size: 24px; }
+    p { margin: 0 0 18px; color: #4b5563; line-height: 1.5; }
+    .log { border: 1px dashed #cbd5e1; border-radius: 18px; padding: 14px; min-height: 80px; font-size: 14px; color: #334155; background: #f8fafc; white-space: pre-wrap; }
+    .btn { margin-top: 18px; width: 100%; border: 0; border-radius: 18px; padding: 14px 18px; font-weight: 800; font-size: 16px; color: white; background: linear-gradient(135deg, #2563eb, #c026d3); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Actualizando app</h1>
+    <p>Estamos limpiando caché y quitando versiones anteriores. Sí, tocó sacar la escoba digital porque los navegadores se aferran al pasado.</p>
+    <div class="log" id="log">Iniciando...</div>
+    <button class="btn" id="go" type="button">Abrir app actualizada</button>
+  </main>
+
+  <script>
+    const BUILD = "2026-05-14.2";
+    const logBox = document.getElementById("log");
+    const go = document.getElementById("go");
+    const log = (msg) => { logBox.textContent += "\n" + msg; };
+
+    async function clearEverything() {
+      try {
+        logBox.textContent = "Limpiando service workers...";
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.allSettled(regs.map((reg) => reg.unregister()));
+          log(`Service workers eliminados: ${regs.length}`);
+        } else {
+          log("Este navegador no reporta service workers.");
+        }
+
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.allSettled(keys.map((key) => caches.delete(key)));
+          log(`Cachés eliminadas: ${keys.length}`);
+        } else {
+          log("Este navegador no reporta Cache Storage.");
+        }
+
+        try { sessionStorage.clear(); log("Session storage limpiado."); } catch (_) {}
+        // No limpiamos IndexedDB para no borrar a la fuerza la sesión de Firebase.
+        log(`Lista para abrir build ${BUILD}.`);
+      } catch (error) {
+        console.error(error);
+        log("No se pudo limpiar todo automáticamente, pero intentaremos abrir la versión nueva.");
+      }
+    }
+
+    function openFresh() {
+      const url = new URL("./index.html", location.href);
+      url.searchParams.set("v", BUILD);
+      url.searchParams.set("fresh", Date.now().toString());
+      location.replace(url.toString());
+    }
+
+    go.addEventListener("click", openFresh);
+    clearEverything().then(() => setTimeout(openFresh, 900));
+  </script>
+</body>
+</html>
