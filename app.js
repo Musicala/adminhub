@@ -3,7 +3,8 @@
    - Hub exclusivo para administrativos
    - Registro de jornada interno con lector QR + Firestore
 */
-const BUILD = "2026-05-14.2";
+const BUILD = "2026-05-19.1";
+const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCsXw0N_GkdwYMkdfZ_H2XIBNeTpGFn_rg",
@@ -893,6 +894,7 @@ async function saveShiftRecord(entry) {
   const existingSnap = await getDoc(ref);
   const existing = existingSnap.exists() ? existingSnap.data() : null;
   const existingTime = existing?.[`${entry.type}Time`];
+  const replacedExisting = Boolean(existingTime);
   if (existingTime) {
     const replace = confirm(`Ya existe un ${entry.type} registrado hoy a las ${existingTime}. ¿Quieres reemplazarlo?`);
     if (!replace) throw new Error("cancelled");
@@ -948,6 +950,28 @@ async function saveShiftRecord(entry) {
       createdAt: serverTimestamp(),
       createdAtClient: Date.now()
     });
+  }
+  await sendIngresoEmailNotification({
+    ...event,
+    date: entry.date,
+    docId,
+    replacedExisting
+  });
+}
+
+async function sendIngresoEmailNotification(event) {
+  if (event?.type !== "ingreso") return;
+  if (!EMAIL_NOTIFICATION_ENDPOINT || EMAIL_NOTIFICATION_ENDPOINT === "PEGAR_AQUI_URL_WEB_APP_APPS_SCRIPT") return;
+  try {
+    await fetch(EMAIL_NOTIFICATION_ENDPOINT, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(event),
+      keepalive: true
+    });
+  } catch (error) {
+    console.warn("No se pudo enviar la notificacion de ingreso por correo", error);
   }
 }
 
