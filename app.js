@@ -1,9 +1,21 @@
 /* Musicala Admin Hub
    - Login con Google (Firebase Auth)
-   - Hub exclusivo para administrativos
-   - Registro de jornada interno con lector QR + Firestore
+   - Hub administrativo + panel de jornadas, puntualidad y estadisticas
+   - Registro de jornada interno con lector QR + Firestore + marcacion remota
+   - Panel admin: estadisticas, horarios por miembro, excepciones y correccion de registros
+
+   Estructura general:
+   1. Config y constantes
+   2. Utilidades (fechas Bogota, formato, DOM, toasts)
+   3. Modelo de datos (roles, member settings, overrides, calculo de puntualidad)
+   4. Service Worker / PWA / install
+   5. Navegacion tipo panel (tabs)
+   6. Vistas: Inicio, Marcar jornada, Registros, Estadisticas, Configuracion, Equipo
+   7. Modales: detalle de registro, edicion/correccion, excepciones, horario
+   8. Auth + mount
 */
-const BUILD = "2026-05-19.1";
+
+const BUILD = "2026-06-05.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -15,15 +27,19 @@ const firebaseConfig = {
   appId: "1:468927778540:web:619daeb67ff0287d92dfc9"
 };
 
+/* Administradores: pueden ver estadisticas globales, configurar horarios y corregir registros. */
+const ADMIN_EMAILS = [
+  "alekcaballeromusic@gmail.com",
+  "catalina.medina.leal@gmail.com"
+];
+
 const HUB = {
   name: "Musicala Admin Hub",
   subtitle: "Centro administrativo",
   GENERAL_LINKS: {
     nomina: "https://docs.google.com/forms/d/e/1FAIpQLSeMOhoY9d8JOf1Oq8DnD_aSEDkBmOXmzYJtlCCU-7CNVYjnLA/viewform",
     apertura: "https://musicala.github.io/protocolodeapertura/",
-    reglamento: "https://drive.google.com/file/d/1Oda0c_FnHrsgME2GE8LCb7z5huH-YbBk/view",
-    jornada: "__INTERNAL_SHIFT__",
-    registrosJornada: "__INTERNAL_RECORDS__"
+    reglamento: "https://drive.google.com/file/d/1Oda0c_FnHrsgME2GE8LCb7z5huH-YbBk/view"
   },
   USERS: {
     "alekcaballeromusic@gmail.com": {
@@ -46,19 +62,20 @@ const HUB = {
       }
     }
   },
-  BUTTONS: [
-    { id: "jornada", icon: "⏱️", title: "Registro de jornada", subtitle: "Sede QR o remoto", section: "Operacion diaria" },
-    { id: "registrosJornada", icon: "📊", title: "Llegadas registradas", subtitle: "Ver historial", section: "Operacion diaria" },
-    { id: "nomina", icon: "💰", title: "Novedades nomina", subtitle: "General", section: "Administracion" },
-    { id: "apertura", icon: "🔑", title: "Protocolo de apertura", subtitle: "General", section: "Administracion" },
-    { id: "horario", icon: "🗓️", title: "Horario anual", subtitle: "Personal", section: "Personal" },
-    { id: "documentos", icon: "📁", title: "Documentos", subtitle: "Personal", section: "Personal" },
-    { id: "reglamento", icon: "📜", title: "Reglamento interno de trabajo", subtitle: "General", section: "Administracion" }
+  // Accesos rapidos (links externos) que se muestran en el Inicio.
+  QUICK_LINKS: [
+    { id: "nomina", icon: "💰", title: "Novedades nomina", subtitle: "General" },
+    { id: "apertura", icon: "🔑", title: "Protocolo de apertura", subtitle: "General" },
+    { id: "reglamento", icon: "📜", title: "Reglamento interno", subtitle: "General" },
+    { id: "horario", icon: "🗓️", title: "Horario anual", subtitle: "Personal" },
+    { id: "documentos", icon: "📁", title: "Documentos", subtitle: "Personal" }
   ]
 };
 
 const COLLECTIONS = {
-  shiftRecords: "adminShiftRecords"
+  shiftRecords: "adminShiftRecords",
+  memberSettings: "adminMemberSettings",
+  scheduleOverrides: "adminScheduleOverrides"
 };
 
 const SHIFT = {
@@ -81,6 +98,37 @@ const USER_RESOURCE_LINKS = {
     documentos: "https://drive.google.com/drive/folders/1xkWt1c7A6fi9a7KPyXCNcbxMiH5QVIIC?usp=drive_link"
   }
 };
+
+/* Dias de la semana (clave Firestore + etiqueta). Orden lun -> dom. */
+const WEEK_DAYS = [
+  { key: "monday", label: "Lunes", short: "Lun" },
+  { key: "tuesday", label: "Martes", short: "Mar" },
+  { key: "wednesday", label: "Miercoles", short: "Mie" },
+  { key: "thursday", label: "Jueves", short: "Jue" },
+  { key: "friday", label: "Viernes", short: "Vie" },
+  { key: "saturday", label: "Sabado", short: "Sab" },
+  { key: "sunday", label: "Domingo", short: "Dom" }
+];
+// getUTCDay(): 0=domingo .. 6=sabado
+const WEEKDAY_INDEX_TO_KEY = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+const DEFAULT_DAY = {
+  enabled: false,
+  start: "08:50",
+  end: "16:00",
+  modality: "sede",
+  graceMinutes: 5,
+  notes: ""
+};
+
+function defaultWeeklySchedule() {
+  const out = {};
+  for (const d of WEEK_DAYS) {
+    const workday = d.key !== "saturday" && d.key !== "sunday";
+    out[d.key] = { ...DEFAULT_DAY, enabled: workday };
+  }
+  return out;
+}
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 import {
@@ -127,6 +175,14 @@ let submitLock = false;
 let loginLock = false;
 let lastQrSaveOkAt = 0;
 
+let CURRENT_TAB = "inicio";
+let MEMBER_SETTINGS = {};     // email -> settings doc (normalizado)
+let SCHEDULE_OVERRIDES = {};  // `${email}__${date}` -> override doc
+let DATA_LOADED = false;
+
+/* ==========================================================================
+   2. Utilidades
+========================================================================== */
 function escapeHtml(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
@@ -139,8 +195,9 @@ function escapeHtml(str) {
 function toast(msg, opts = {}) {
   const el = ($("#toast-app") && !$("#toast-app").hidden) ? $("#toast-app") : ($("#toast") || $("#toast-app"));
   if (!el) return;
-  const { actionText = "", onAction = null, sticky = false, ms = 2800 } = opts;
+  const { actionText = "", onAction = null, sticky = false, ms = 2800, kind = "" } = opts;
   el.classList.remove("show");
+  el.dataset.kind = kind || "";
   el.hidden = false;
   el.innerHTML = `<span class="toastMsg">${escapeHtml(msg)}</span>`;
   if (actionText) {
@@ -179,11 +236,15 @@ function emailKey(user) {
 function normalizeIdentity(value) {
   return String(value || "")
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9@._+\-\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function safeEmailId(email) {
+  return String(email || "").toLowerCase().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
 }
 
 function prettyName(user, fallbackEmail = "") {
@@ -210,53 +271,94 @@ function buildLinksForUser(email) {
   return { ...base, ...(profile?.links || {}), ...getUserResourceLinks(email, profile) };
 }
 
-function getProfileName() {
-  return ACTIVE_PROFILE?.label || prettyName(ACTIVE_USER, ACTIVE_EMAIL);
+function getProfileName(email = ACTIVE_EMAIL) {
+  if (email === ACTIVE_EMAIL) return ACTIVE_PROFILE?.label || prettyName(ACTIVE_USER, ACTIVE_EMAIL);
+  return MEMBER_SETTINGS[email]?.name || HUB.USERS?.[email]?.label || email;
+}
+
+function isCurrentUserAdmin() {
+  return ADMIN_EMAILS.map(normalizeIdentity).includes(normalizeIdentity(ACTIVE_EMAIL));
+}
+
+function isAdminEmail(email) {
+  return ADMIN_EMAILS.map(normalizeIdentity).includes(normalizeIdentity(email));
 }
 
 function canCurrentUserMarkRemote() {
-  const current = [
-    ACTIVE_EMAIL,
-    getProfileName(),
-    ACTIVE_USER?.displayName
-  ].map(normalizeIdentity).filter(Boolean);
-  return REMOTE_WORK_ALLOWED_USERS
-    .map(normalizeIdentity)
-    .some((allowed) => current.includes(allowed));
+  if (MEMBER_SETTINGS[ACTIVE_EMAIL]?.canWorkRemote) return true;
+  const current = [ACTIVE_EMAIL, getProfileName(), ACTIVE_USER?.displayName].map(normalizeIdentity).filter(Boolean);
+  return REMOTE_WORK_ALLOWED_USERS.map(normalizeIdentity).some((allowed) => current.includes(allowed));
 }
 
 function remoteNotAllowedMessage() {
   return "La marcacion desde casa no esta habilitada para tu usuario. Por favor marca tu ingreso en la sede con el codigo QR.";
 }
 
+/* ---- Fechas / zona horaria America/Bogota ---- */
 function getBogotaParts(date = new Date()) {
   const dateFmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: SHIFT.timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
+    timeZone: SHIFT.timezone, year: "numeric", month: "2-digit", day: "2-digit"
   });
   const timeFmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: SHIFT.timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
+    timeZone: SHIFT.timezone, hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
   });
   return { date: dateFmt.format(date), time: timeFmt.format(date).slice(0, 5) };
+}
+
+function todayBogota() {
+  return getBogotaParts().date;
+}
+
+function weekdayKeyForDate(dateStr) {
+  // dateStr: YYYY-MM-DD. Independiente de la zona del dispositivo.
+  const idx = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+  return WEEKDAY_INDEX_TO_KEY[idx];
+}
+
+function formatLongDate(dateStr) {
+  try {
+    return new Intl.DateTimeFormat("es-CO", {
+      timeZone: "UTC", weekday: "long", day: "numeric", month: "long"
+    }).format(new Date(`${dateStr}T00:00:00Z`));
+  } catch (_) { return dateStr; }
 }
 
 function formatDateTime(iso) {
   if (!iso) return "-";
   try {
     return new Intl.DateTimeFormat("es-CO", {
-      timeZone: SHIFT.timezone,
-      dateStyle: "medium",
-      timeStyle: "short"
+      timeZone: SHIFT.timezone, dateStyle: "medium", timeStyle: "short"
     }).format(new Date(iso));
-  } catch (_) {
-    return iso;
-  }
+  } catch (_) { return iso; }
+}
+
+function toMinutes(hhmm) {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function minutesToHhmm(min) {
+  if (min == null || isNaN(min)) return "-";
+  const sign = min < 0 ? "-" : "";
+  const abs = Math.abs(Math.round(min));
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `${sign}${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+function addDaysStr(dateStr, days) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function datesInRange(from, to) {
+  const out = [];
+  let cur = from;
+  let guard = 0;
+  while (cur <= to && guard < 800) { out.push(cur); cur = addDaysStr(cur, 1); guard++; }
+  return out;
 }
 
 function formatShiftMode(mode, source) {
@@ -267,59 +369,318 @@ function formatShiftMode(mode, source) {
   return "-";
 }
 
-function normalizeQrText(rawText) {
-  return String(rawText || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function sourceLabel(source) {
+  if (source === "qr") return "QR";
+  if (source === "manual_remote") return "Remoto";
+  if (source === "manual_admin") return "Manual admin";
+  return source || "-";
 }
 
-function detectShiftType(rawText) {
-  const raw = normalizeQrText(rawText);
-  const compact = raw.replace(/\s+/g, "");
+/* ==========================================================================
+   3. Modelo de datos: roles, horarios, excepciones y puntualidad
+========================================================================== */
 
-  // Acepta variaciones antiguas/nuevas del QR: ADM-LLEGADA, ADM LLEGADA, INGRESO, ENTRADA, etc.
-  if (raw.includes("SALIDA") || compact.includes("ADMSALIDA") || raw.includes("CHECK OUT") || compact.includes("CHECKOUT") || /(^|\W)OUT($|\W)/.test(raw)) {
-    return "salida";
+/* Carga member settings y overrides. Los miembros normales solo leen lo suyo;
+   los admins cargan todo el equipo. */
+async function loadAdminData({ force = false } = {}) {
+  if (DATA_LOADED && !force) return;
+  MEMBER_SETTINGS = {};
+  SCHEDULE_OVERRIDES = {};
+  try {
+    if (isCurrentUserAdmin()) {
+      const ms = await getDocs(collection(DB, COLLECTIONS.memberSettings));
+      ms.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
+      const ov = await getDocs(collection(DB, COLLECTIONS.scheduleOverrides));
+      ov.forEach((d) => { const data = d.data(); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = { id: d.id, ...data }; });
+    } else if (ACTIVE_EMAIL) {
+      const sref = doc(DB, COLLECTIONS.memberSettings, safeEmailId(ACTIVE_EMAIL));
+      const ssnap = await getDoc(sref);
+      if (ssnap.exists()) MEMBER_SETTINGS[ACTIVE_EMAIL] = normalizeSettings(ssnap.data());
+    }
+  } catch (error) {
+    console.warn("No se pudieron cargar configuraciones de horario", error);
+  }
+  // Sembrar defaults en memoria para miembros del whitelist sin settings (no se escriben en Firestore).
+  for (const email of Object.keys(HUB.USERS || {})) {
+    if (!MEMBER_SETTINGS[email]) MEMBER_SETTINGS[email] = defaultSettingsFor(email, { seeded: true });
+  }
+  DATA_LOADED = true;
+}
+
+function defaultSettingsFor(email, extra = {}) {
+  return {
+    email,
+    name: HUB.USERS?.[email]?.label || email,
+    role: isAdminEmail(email) ? "admin" : "member",
+    active: true,
+    canWorkRemote: REMOTE_WORK_ALLOWED_USERS.map(normalizeIdentity).includes(normalizeIdentity(email)),
+    defaultGraceMinutes: 5,
+    weeklySchedule: defaultWeeklySchedule(),
+    ...extra
+  };
+}
+
+function normalizeSettings(data) {
+  const weekly = {};
+  const src = data?.weeklySchedule || {};
+  for (const d of WEEK_DAYS) {
+    const day = src[d.key] || {};
+    weekly[d.key] = {
+      enabled: Boolean(day.enabled),
+      start: day.start || DEFAULT_DAY.start,
+      end: day.end || DEFAULT_DAY.end,
+      modality: day.modality || "sede",
+      graceMinutes: Number.isFinite(day.graceMinutes) ? day.graceMinutes : (data?.defaultGraceMinutes ?? 5),
+      notes: day.notes || ""
+    };
+  }
+  return {
+    email: String(data?.email || "").toLowerCase().trim(),
+    name: data?.name || "",
+    role: data?.role === "admin" ? "admin" : "member",
+    active: data?.active !== false,
+    canWorkRemote: Boolean(data?.canWorkRemote),
+    defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
+    weeklySchedule: weekly,
+    updatedAtClient: data?.updatedAtClient || null,
+    updatedBy: data?.updatedBy || ""
+  };
+}
+
+function getActiveMemberSettings() {
+  return MEMBER_SETTINGS[ACTIVE_EMAIL] || defaultSettingsFor(ACTIVE_EMAIL, { seeded: true });
+}
+
+function getScheduleOverride(email, date) {
+  return SCHEDULE_OVERRIDES[`${email}__${date}`] || null;
+}
+
+/* Prioridad: excepcion por fecha -> horario semanal -> sin horario (null). */
+function getExpectedScheduleForDate(email, date) {
+  const override = getScheduleOverride(email, date);
+  if (override) {
+    if (override.enabled === false) return null; // dia libre por excepcion
+    return {
+      source: "override",
+      start: override.start, end: override.end,
+      modality: override.modality || "sede",
+      graceMinutes: Number.isFinite(override.graceMinutes) ? override.graceMinutes : 5,
+      reason: override.reason || ""
+    };
+  }
+  const settings = MEMBER_SETTINGS[email];
+  if (!settings || settings.active === false) return null;
+  const day = settings.weeklySchedule?.[weekdayKeyForDate(date)];
+  if (!day || !day.enabled) return null;
+  return {
+    source: "weekly",
+    start: day.start, end: day.end,
+    modality: day.modality || "sede",
+    graceMinutes: Number.isFinite(day.graceMinutes) ? day.graceMinutes : (settings.defaultGraceMinutes ?? 5),
+    notes: day.notes || ""
+  };
+}
+
+/* Calcula el estado del registro a partir del registro + horario esperado.
+   Funcion centralizada: el estado nunca se guarda solo como texto visual. */
+function calculateShiftStatus(record, schedule) {
+  const ingreso = record?.ingresoTime || null;
+  const salida = record?.salidaTime || null;
+  const hasIngreso = Boolean(ingreso);
+  const hasSalida = Boolean(salida);
+
+  const out = {
+    status: "sin-registro",
+    label: "Sin registro",
+    lateMinutes: 0,
+    workedMinutes: null,
+    expectedMinutes: null,
+    isLate: false,
+    isOnTime: false,
+    isIncomplete: false,
+    leftEarly: false,
+    isExtra: false,
+    isAbsent: false,
+    edited: Boolean(record?.manualCorrection),
+    voided: Boolean(record?.voided),
+    flags: []
+  };
+
+  if (out.voided) { out.status = "anulado"; out.label = "Anulado"; return out; }
+
+  if (hasIngreso && hasSalida) {
+    const wi = toMinutes(ingreso), ws = toMinutes(salida);
+    if (wi != null && ws != null) out.workedMinutes = Math.max(0, ws - wi);
   }
 
-  if (raw.includes("LLEGADA") || raw.includes("INGRESO") || raw.includes("ENTRADA") || compact.includes("ADMLLEGADA") || compact.includes("ADMINGRESO") || raw.includes("CHECK IN") || compact.includes("CHECKIN")) {
-    return "ingreso";
+  // Sin horario configurado para ese dia
+  if (!schedule) {
+    if (hasIngreso) { out.status = "extra"; out.label = "Fuera de horario"; out.isExtra = true; }
+    else { out.status = "sin-horario"; out.label = "Sin horario"; }
+    if (!hasSalida && hasIngreso) { out.isIncomplete = true; out.flags.push("incompleto"); }
+    return finalizeStatus(out, record);
   }
 
-  return "";
+  const startMin = toMinutes(schedule.start);
+  const endMin = toMinutes(schedule.end);
+  const grace = Number.isFinite(schedule.graceMinutes) ? schedule.graceMinutes : 5;
+  if (startMin != null && endMin != null) out.expectedMinutes = Math.max(0, endMin - startMin);
+
+  if (!hasIngreso) {
+    out.status = "ausente"; out.label = "Ausente"; out.isAbsent = true;
+    return finalizeStatus(out, record);
+  }
+
+  const ingMin = toMinutes(ingreso);
+  if (ingMin != null && startMin != null) {
+    out.lateMinutes = Math.max(0, ingMin - startMin);
+    out.isLate = (ingMin - startMin) > grace;
+    out.isOnTime = !out.isLate;
+  }
+  out.status = out.isLate ? "tarde" : "puntual";
+  out.label = out.isLate ? "Tarde" : "Puntual";
+
+  if (!hasSalida) { out.isIncomplete = true; out.flags.push("incompleto"); }
+  if (hasSalida && endMin != null) {
+    const salMin = toMinutes(salida);
+    if (salMin != null && salMin < endMin - grace) { out.leftEarly = true; out.flags.push("salida-temprana"); }
+  }
+  return finalizeStatus(out, record);
 }
 
-function isIOS() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent || "");
+function finalizeStatus(out, record) {
+  if (record?.statusOverride) {
+    out.status = "justificado";
+    out.label = record.statusOverride === "justificado" ? "Justificado" : record.statusOverride;
+    out.justified = true;
+  }
+  if (out.edited) out.flags.push("editado");
+  return out;
 }
 
-function isStandalone() {
-  return Boolean(window.navigator.standalone) || window.matchMedia?.("(display-mode: standalone)").matches;
-}
+/* Agrega estadisticas para un rango de fechas. */
+function calculateStats(records, range) {
+  const { from, to, memberFilter = "all", modalityFilter = "all", statusFilter = "all" } = range;
+  const days = datesInRange(from, to);
+  const members = adminMemberList().filter((m) => memberFilter === "all" || m.email === memberFilter);
 
-function setInstallUI(visible) {
-  ["btn-install", "btn-install-2"].forEach((id) => {
-    const btn = document.getElementById(id);
-    if (btn) btn.hidden = !visible;
+  // Index registros por email+fecha
+  const byKey = {};
+  for (const r of records) {
+    if (r.date < from || r.date > to) continue;
+    byKey[`${r.email}__${r.date}`] = r;
+  }
+
+  const global = {
+    expectedDays: 0, registeredDays: 0, completeDays: 0, incompleteDays: 0,
+    onTime: 0, late: 0, absent: 0, extra: 0, leftEarly: 0, justified: 0,
+    totalLateMinutes: 0, totalWorkedMinutes: 0, arrivalMinutesSum: 0, arrivalCount: 0
+  };
+  const perMember = {};
+  const perDay = {};
+
+  for (const m of members) {
+    perMember[m.email] = {
+      email: m.email, name: m.name, expected: 0, registered: 0, onTime: 0, late: 0,
+      absent: 0, incomplete: 0, lateMinutes: 0, workedMinutes: 0, arrivalSum: 0, arrivalCount: 0, justified: 0
+    };
+  }
+
+  for (const date of days) {
+    perDay[date] = { date, expected: 0, onTime: 0, late: 0, absent: 0, incomplete: 0, registered: 0 };
+    for (const m of members) {
+      const schedule = getExpectedScheduleForDate(m.email, date);
+      const rec = byKey[`${m.email}__${date}`];
+      const calc = calculateShiftStatus(rec || {}, schedule);
+
+      // Filtros por modalidad / estado se aplican a registros existentes
+      if (rec) {
+        if (modalityFilter !== "all") {
+          const mod = (rec.modalidad || "").toLowerCase();
+          const isRemote = mod === "remoto" || rec.ingresoMode === "remoto";
+          if (modalityFilter === "sede" && isRemote) continue;
+          if (modalityFilter === "remoto" && !isRemote) continue;
+        }
+        if (statusFilter !== "all" && calc.status !== statusFilter && !calc.flags.includes(statusFilter)) {
+          // permite filtrar por flags (editado, incompleto)
+          if (!(statusFilter === "editado" && calc.edited)) continue;
+        }
+      } else if (statusFilter !== "all" && statusFilter !== "ausente") {
+        continue;
+      }
+
+      const pm = perMember[m.email];
+      if (schedule) {
+        global.expectedDays++; pm.expected++; perDay[date].expected++;
+      }
+      if (rec && rec.ingresoTime) {
+        global.registeredDays++; pm.registered++; perDay[date].registered++;
+        const ingMin = toMinutes(rec.ingresoTime);
+        if (ingMin != null) { global.arrivalMinutesSum += ingMin; global.arrivalCount++; pm.arrivalSum += ingMin; pm.arrivalCount++; }
+        if (calc.workedMinutes != null) { global.totalWorkedMinutes += calc.workedMinutes; pm.workedMinutes += calc.workedMinutes; }
+        if (calc.isIncomplete) { global.incompleteDays++; pm.incomplete++; perDay[date].incomplete++; }
+        else global.completeDays++;
+        if (calc.justified) { global.justified++; pm.justified++; }
+        else if (calc.isLate) {
+          global.late++; pm.late++; perDay[date].late++;
+          global.totalLateMinutes += calc.lateMinutes; pm.lateMinutes += calc.lateMinutes;
+        } else if (calc.isOnTime) { global.onTime++; pm.onTime++; perDay[date].onTime++; }
+        if (calc.leftEarly) global.leftEarly++;
+        if (calc.isExtra) global.extra++;
+      } else if (schedule) {
+        global.absent++; pm.absent++; perDay[date].absent++;
+      }
+    }
+  }
+
+  const evaluated = global.onTime + global.late;
+  global.punctualityPct = evaluated ? Math.round((global.onTime / evaluated) * 100) : 0;
+  global.avgLateMinutes = global.late ? Math.round(global.totalLateMinutes / global.late) : 0;
+  global.avgArrival = global.arrivalCount ? minutesToHhmmClock(Math.round(global.arrivalMinutesSum / global.arrivalCount)) : "-";
+  global.attendancePct = global.expectedDays ? Math.round((global.registeredDays / global.expectedDays) * 100) : 0;
+
+  const memberRows = Object.values(perMember).map((pm) => {
+    const ev = pm.onTime + pm.late;
+    return {
+      ...pm,
+      punctualityPct: ev ? Math.round((pm.onTime / ev) * 100) : 0,
+      avgArrival: pm.arrivalCount ? minutesToHhmmClock(Math.round(pm.arrivalSum / pm.arrivalCount)) : "-",
+      avgArrivalMin: pm.arrivalCount ? Math.round(pm.arrivalSum / pm.arrivalCount) : null
+    };
   });
+
+  return { global, memberRows, dayRows: Object.values(perDay), days };
+}
+
+function minutesToHhmmClock(min) {
+  if (min == null || isNaN(min)) return "-";
+  const h = Math.floor(min / 60), m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function adminMemberList() {
+  const emails = new Set([...Object.keys(HUB.USERS || {}), ...Object.keys(MEMBER_SETTINGS)]);
+  return Array.from(emails).map((email) => {
+    const s = MEMBER_SETTINGS[email] || defaultSettingsFor(email, { seeded: true });
+    return { email, name: s.name || HUB.USERS?.[email]?.label || email, settings: s, active: s.active !== false };
+  }).filter((m) => m.active).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/* ==========================================================================
+   4. PWA / Service worker / install
+========================================================================== */
+function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent || ""); }
+function isStandalone() { return Boolean(window.navigator.standalone) || window.matchMedia?.("(display-mode: standalone)").matches; }
+function setInstallUI(visible) {
+  ["btn-install", "btn-install-2"].forEach((id) => { const btn = document.getElementById(id); if (btn) btn.hidden = !visible; });
 }
 
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  const promptUpdate = (reg) => {
-    if (!reg?.waiting) return;
-    reg.waiting.postMessage({ type: "SKIP_WAITING" });
-  };
+  const promptUpdate = (reg) => { if (!reg?.waiting) return; reg.waiting.postMessage({ type: "SKIP_WAITING" }); };
   try {
     const swUrl = `./sw.js?v=${encodeURIComponent(BUILD)}`;
-    const reg = await navigator.serviceWorker.register(swUrl, {
-      scope: "./",
-      updateViaCache: "none"
-    });
+    const reg = await navigator.serviceWorker.register(swUrl, { scope: "./", updateViaCache: "none" });
     promptUpdate(reg);
     reg.addEventListener("updatefound", () => {
       const sw = reg.installing;
@@ -328,9 +689,7 @@ async function registerServiceWorker() {
       });
     });
     navigator.serviceWorker.addEventListener("message", (event) => {
-      if (event.data?.type === "SW_ACTIVATED") {
-        console.log("SW_ACTIVATED", event.data.version);
-      }
+      if (event.data?.type === "SW_ACTIVATED") console.log("SW_ACTIVATED", event.data.version);
     });
     navigator.serviceWorker.addEventListener("controllerchange", () => {
       if (window.__reloadingForSW) return;
@@ -365,10 +724,7 @@ async function clearLocalAppCacheAndReload() {
 }
 
 function setupInstallPrompt() {
-  if (isStandalone()) {
-    setInstallUI(false);
-    return;
-  }
+  if (isStandalone()) { setInstallUI(false); return; }
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     __deferredInstallPrompt = event;
@@ -380,14 +736,8 @@ function setupInstallPrompt() {
     toast("App instalada");
   });
   const onInstallClick = async () => {
-    if (isIOS() && !__deferredInstallPrompt) {
-      toast("En iPhone/iPad: Compartir > Agregar a pantalla de inicio");
-      return;
-    }
-    if (!__deferredInstallPrompt) {
-      toast("Instalacion no disponible todavia");
-      return;
-    }
+    if (isIOS() && !__deferredInstallPrompt) { toast("En iPhone/iPad: Compartir > Agregar a pantalla de inicio"); return; }
+    if (!__deferredInstallPrompt) { toast("Instalacion no disponible todavia"); return; }
     __deferredInstallPrompt.prompt();
     await __deferredInstallPrompt.userChoice.catch(() => null);
     __deferredInstallPrompt = null;
@@ -396,219 +746,276 @@ function setupInstallPrompt() {
   $("#btn-install-2")?.addEventListener("click", onInstallClick);
 }
 
-function renderHero() {
-  let hero = $("#admin-hero");
-  if (hero) return;
-  const top = $(".top");
-  if (!top) return;
-  hero = document.createElement("section");
-  hero.id = "admin-hero";
-  hero.className = "workspaceHero";
-  hero.innerHTML = `
-    <div class="heroIntro">
-      <p class="heroEyebrow">Inicio de hoy</p>
-      <h3 class="heroTitle">Administracion Musicala</h3>
-      <p class="heroText">Marca jornada, revisa accesos administrativos y conserva los documentos clave en un solo lugar.</p>
-    </div>
-    <div class="heroFocus">
-      <div class="heroFocusLabel">Jornada</div>
-      <div class="heroFocusTitle" id="hero-shift-title">Marca tu jornada</div>
-      <p class="heroFocusText" id="hero-shift-subtitle">${canCurrentUserMarkRemote() ? "Escanea QR si estas en sede o marca manualmente si trabajas remoto." : "Escanea el QR en sede para registrar tu ingreso o salida."}</p>
-      <div class="heroActions">
-        <button class="btnPrimary" type="button" data-hero-action="jornada">Marcar jornada</button>
-        <button class="btnGhost" type="button" data-hero-action="registrosJornada">Ver registros</button>
-      </div>
-    </div>
-  `;
-  top.insertAdjacentElement("afterend", hero);
-  hero.addEventListener("click", (event) => {
-    const btn = event.target.closest("[data-hero-action]");
-    if (btn) triggerAccess(btn.dataset.heroAction);
-  });
-}
+/* ==========================================================================
+   5. Navegacion tipo panel
+========================================================================== */
+const TABS = [
+  { id: "inicio", label: "Inicio", icon: "🏠", admin: false },
+  { id: "jornada", label: "Marcar", icon: "⏱️", admin: false },
+  { id: "registros", label: "Registros", icon: "🗂️", admin: false },
+  { id: "stats", label: "Estadisticas", icon: "📊", admin: true },
+  { id: "config", label: "Configuracion", icon: "⚙️", admin: true },
+  { id: "equipo", label: "Equipo", icon: "👥", admin: true }
+];
 
-function renderButtons(buttons, links) {
-  const grid = $("#grid");
-  if (!grid) return;
-  ACTIVE_LINKS = links || {};
-  const sections = new Map();
-  for (const button of buttons || []) {
-    const section = button.section || "General";
-    if (!sections.has(section)) sections.set(section, []);
-    sections.get(section).push(button);
-  }
-  grid.innerHTML = Array.from(sections.entries()).map(([section, items]) => `
-    <div class="gridSection">
-      <div class="sectionTitle">${escapeHtml(section)}</div>
-      <div class="sectionGrid">
-        ${items.map((b) => {
-          const url = String(ACTIVE_LINKS[b.id] || "").trim();
-          const internal = url.startsWith("__INTERNAL_");
-          const pending = !url;
-          const badgeText = pending ? "Pendiente" : (internal ? "Abrir" : "Abrir");
-          return `
-            <button class="tile${pending ? " pending" : ""}" type="button" data-id="${escapeHtml(b.id)}" aria-label="${escapeHtml(b.title)}">
-              <div class="tileTop">
-                <div class="ico" aria-hidden="true">${escapeHtml(b.icon)}</div>
-                <span class="badge${pending ? "" : " ok"}">${badgeText}</span>
-              </div>
-              <div class="tileText">
-                <div class="tTitle">${escapeHtml(b.title)}</div>
-                <div class="tSub">${escapeHtml(b.subtitle)}</div>
-              </div>
-            </button>
-          `;
-        }).join("")}
-      </div>
-    </div>
+function renderNav() {
+  const nav = $("#panel-nav");
+  if (!nav) return;
+  const admin = isCurrentUserAdmin();
+  nav.innerHTML = TABS.filter((t) => !t.admin || admin).map((t) => `
+    <button class="navItem${t.id === CURRENT_TAB ? " active" : ""}" type="button" data-tab="${t.id}">
+      <span class="navIco" aria-hidden="true">${t.icon}</span>
+      <span class="navLbl">${escapeHtml(t.label)}</span>
+    </button>
   `).join("");
-
-  if (!grid.__boundClick) {
-    grid.__boundClick = true;
-    grid.addEventListener("click", (event) => {
-      const btn = event.target.closest("button[data-id]");
-      if (btn) triggerAccess(btn.getAttribute("data-id"));
+  if (!nav.__bound) {
+    nav.__bound = true;
+    nav.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-tab]");
+      if (btn) goTab(btn.dataset.tab);
     });
   }
 }
 
-function triggerAccess(id) {
+async function goTab(tab) {
+  const def = TABS.find((t) => t.id === tab);
+  if (def?.admin && !isCurrentUserAdmin()) { toast("No tienes permisos para esta seccion.", { kind: "warn" }); return; }
+  CURRENT_TAB = tab;
+  renderNav();
+  await stopQrScanner();
+  const host = $("#panel-content");
+  if (host) host.scrollTop = 0;
+  switch (tab) {
+    case "inicio": return renderDashboard();
+    case "jornada": return renderShiftTab();
+    case "registros": return renderRecordsTab();
+    case "stats": return renderAdminStats();
+    case "config": return renderConfigTab();
+    case "equipo": return renderTeamTab();
+    default: return renderDashboard();
+  }
+}
+
+function panel() { return $("#panel-content"); }
+function setPanel(html) { const p = panel(); if (p) p.innerHTML = html; }
+
+/* ==========================================================================
+   6a. Vista: Inicio / Dashboard
+========================================================================== */
+async function renderDashboard() {
+  const admin = isCurrentUserAdmin();
+  setPanel(`<div class="loadingBlock">Cargando inicio…</div>`);
+  await loadAdminData().catch(() => {});
+  const date = todayBogota();
+  let records = [];
+  try { records = await getShiftRecords({ mineOnly: !admin, max: admin ? 200 : 30 }); } catch (_) {}
+
+  if (admin) return renderAdminDashboard(records, date);
+  return renderMemberDashboard(records, date);
+}
+
+function statusBadge(calc) {
+  const map = {
+    "puntual": ["ok", "Puntual"], "tarde": ["late", "Tarde"], "ausente": ["absent", "Ausente"],
+    "incompleto": ["warn", "Incompleto"], "justificado": ["info", "Justificado"],
+    "extra": ["info", "Fuera de horario"], "sin-horario": ["muted", "Sin horario"],
+    "sin-registro": ["muted", "Pendiente"], "anulado": ["muted", "Anulado"]
+  };
+  let key = calc.status;
+  if (calc.isIncomplete && (calc.status === "puntual" || calc.status === "tarde")) {
+    // mostrar ambos
+  }
+  const [cls, lbl] = map[key] || ["muted", calc.label || key];
+  const extra = [];
+  if (calc.isIncomplete && key !== "incompleto") extra.push(`<span class="badgeChip warn">Incompleto</span>`);
+  if (calc.leftEarly) extra.push(`<span class="badgeChip warn">Salida temprana</span>`);
+  if (calc.edited) extra.push(`<span class="badgeChip info">Editado</span>`);
+  return `<span class="badgeChip ${cls}">${escapeHtml(lbl)}</span>${extra.join("")}`;
+}
+
+function renderMemberDashboard(records, date) {
+  const todayRec = records.find((r) => r.date === date);
+  const schedule = getExpectedScheduleForDate(ACTIVE_EMAIL, date);
+  const calc = calculateShiftStatus(todayRec || {}, schedule);
+  const recent = records.filter((r) => r.date !== date).slice(0, 5);
+
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">${escapeHtml(formatLongDate(date))}</p>
+        <h2 class="dashTitle">Hola, ${escapeHtml(getProfileName().split(" ")[0])} 👋</h2>
+        <p class="dashSub">Este es tu estado de jornada de hoy.</p>
+      </div>
+    </section>
+
+    <section class="todayCard">
+      <div class="todayState">
+        <div class="todayStateTop">
+          <span class="todayLabel">Mi jornada de hoy</span>
+          ${statusBadge(calc)}
+        </div>
+        <div class="todayTimes">
+          <div class="timeBox"><span>Ingreso</span><strong>${escapeHtml(todayRec?.ingresoTime || "—")}</strong></div>
+          <div class="timeArrow">→</div>
+          <div class="timeBox"><span>Salida</span><strong>${escapeHtml(todayRec?.salidaTime || "—")}</strong></div>
+        </div>
+        <div class="todayMeta">
+          ${schedule
+            ? `<span>Hora esperada de ingreso: <strong>${escapeHtml(schedule.start)}</strong> · ${escapeHtml(schedule.modality)}${schedule.source === "override" ? " · excepcion" : ""}</span>`
+            : `<span>Hoy no tienes un horario configurado.</span>`}
+        </div>
+        <div class="todayActions">
+          <button class="btnPrimary" type="button" data-go="jornada">Marcar jornada</button>
+          <button class="btnGhost" type="button" data-go="registros">Ver mis registros</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">Ultimos registros</h3>
+      ${recent.length ? `<div class="miniList">${recent.map((r) => {
+        const c = calculateShiftStatus(r, getExpectedScheduleForDate(ACTIVE_EMAIL, r.date));
+        return `<div class="miniRow"><span class="miniDate">${escapeHtml(r.date)}</span><span>${escapeHtml(r.ingresoTime || "—")} – ${escapeHtml(r.salidaTime || "—")}</span>${statusBadge(c)}</div>`;
+      }).join("")}</div>` : `<div class="emptyState">Aun no tienes registros recientes.</div>`}
+    </section>
+
+    ${renderQuickLinksSection()}
+  `);
+  wireGoButtons();
+}
+
+function renderAdminDashboard(records, date) {
+  const members = adminMemberList();
+  const todayRecs = records.filter((r) => r.date === date);
+  const byEmail = {}; todayRecs.forEach((r) => { byEmail[r.email] = r; });
+
+  let marcaron = 0, faltan = 0, tarde = 0, incompletos = 0, puntuales = 0, esperados = 0;
+  const pendientes = [], tardios = [];
+  for (const m of members) {
+    const schedule = getExpectedScheduleForDate(m.email, date);
+    const rec = byEmail[m.email];
+    const calc = calculateShiftStatus(rec || {}, schedule);
+    if (schedule) esperados++;
+    if (rec?.ingresoTime) {
+      marcaron++;
+      if (calc.isIncomplete) incompletos++;
+      if (calc.isLate) { tarde++; tardios.push({ name: m.name, time: rec.ingresoTime, late: calc.lateMinutes }); }
+      else if (calc.isOnTime) puntuales++;
+    } else if (schedule) { faltan++; pendientes.push(m.name); }
+  }
+  const ev = puntuales + tarde;
+  const pPct = ev ? Math.round((puntuales / ev) * 100) : 0;
+
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">${escapeHtml(formatLongDate(date))}</p>
+        <h2 class="dashTitle">Panel del equipo</h2>
+        <p class="dashSub">Resumen de jornadas de hoy en tiempo real.</p>
+      </div>
+      <button class="btnGhost btnSmall" type="button" data-go="stats">Ver estadisticas →</button>
+    </section>
+
+    <section class="kpiGrid">
+      ${kpiCard("Ya marcaron", marcaron, `de ${esperados} esperados`, "ok")}
+      ${kpiCard("Faltan por marcar", faltan, "ingreso pendiente", faltan ? "warn" : "ok")}
+      ${kpiCard("Llegadas tarde", tarde, "hoy", tarde ? "late" : "ok")}
+      ${kpiCard("Puntualidad", pPct + "%", `${puntuales} puntuales`, pPct >= 80 ? "ok" : "warn")}
+    </section>
+
+    <div class="dashCols">
+      <section class="dashSection card">
+        <h3 class="sectionH">Falta por marcar (${pendientes.length})</h3>
+        ${pendientes.length ? `<div class="chipWrap">${pendientes.map((n) => `<span class="badgeChip warn">${escapeHtml(n)}</span>`).join("")}</div>` : `<div class="emptyState">Todos los esperados ya marcaron. 🎉</div>`}
+      </section>
+      <section class="dashSection card">
+        <h3 class="sectionH">Llegadas tarde (${tardios.length})</h3>
+        ${tardios.length ? `<div class="miniList">${tardios.map((t) => `<div class="miniRow"><span>${escapeHtml(t.name)}</span><span>${escapeHtml(t.time)}</span><span class="badgeChip late">+${t.late} min</span></div>`).join("")}</div>` : `<div class="emptyState">Sin llegadas tarde hoy. 👌</div>`}
+      </section>
+    </div>
+
+    <section class="dashSection">
+      <h3 class="sectionH">Estado de hoy por miembro</h3>
+      <div class="tableWrap">
+        <table class="dataTable">
+          <thead><tr><th>Miembro</th><th>Ingreso</th><th>Salida</th><th>Esperado</th><th>Estado</th></tr></thead>
+          <tbody>
+            ${members.map((m) => {
+              const schedule = getExpectedScheduleForDate(m.email, date);
+              const rec = byEmail[m.email];
+              const calc = calculateShiftStatus(rec || {}, schedule);
+              return `<tr>
+                <td data-label="Miembro"><strong>${escapeHtml(m.name)}</strong></td>
+                <td data-label="Ingreso">${escapeHtml(rec?.ingresoTime || "—")}</td>
+                <td data-label="Salida">${escapeHtml(rec?.salidaTime || "—")}</td>
+                <td data-label="Esperado">${schedule ? escapeHtml(schedule.start) : "—"}</td>
+                <td data-label="Estado">${statusBadge(calc)}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="quickRow">
+      <button class="quickBtn" type="button" data-go="registros"><span>🗂️</span> Registros</button>
+      <button class="quickBtn" type="button" data-go="config"><span>⚙️</span> Horarios</button>
+      <button class="quickBtn" type="button" data-go="equipo"><span>👥</span> Equipo</button>
+    </section>
+  `);
+  wireGoButtons();
+}
+
+function kpiCard(label, value, sub, tone = "") {
+  return `<div class="kpiCard ${tone}">
+    <div class="kpiValue">${escapeHtml(String(value))}</div>
+    <div class="kpiLabel">${escapeHtml(label)}</div>
+    <div class="kpiSub">${escapeHtml(sub || "")}</div>
+  </div>`;
+}
+
+function renderQuickLinksSection() {
+  const items = HUB.QUICK_LINKS.filter((q) => String(ACTIVE_LINKS[q.id] || "").trim());
+  if (!items.length) return "";
+  return `
+    <section class="dashSection">
+      <h3 class="sectionH">Accesos rapidos</h3>
+      <div class="linkGrid">
+        ${items.map((q) => `
+          <button class="linkTile" type="button" data-link="${escapeHtml(q.id)}">
+            <span class="linkIco">${escapeHtml(q.icon)}</span>
+            <span class="linkText"><strong>${escapeHtml(q.title)}</strong><small>${escapeHtml(q.subtitle)}</small></span>
+          </button>`).join("")}
+      </div>
+    </section>`;
+}
+
+function wireGoButtons() {
+  $$("[data-go]", panel()).forEach((b) => b.addEventListener("click", () => goTab(b.dataset.go)));
+  $$("[data-link]", panel()).forEach((b) => b.addEventListener("click", () => openExternalLink(b.dataset.link)));
+}
+
+function openExternalLink(id) {
   const url = String(ACTIVE_LINKS[id] || "").trim();
-  if (id === "jornada" || url === "__INTERNAL_SHIFT__") {
-    openShiftModal();
-    return;
-  }
-  if (id === "registrosJornada" || url === "__INTERNAL_RECORDS__") {
-    openRecordsModal();
-    return;
-  }
-  if (!url) {
-    toast(`Pendiente: falta pegar el link de "${id}"`);
-    return;
-  }
+  if (!url) { toast("Este acceso aun no tiene link configurado."); return; }
   const safeUrl = /^(https?:)?\/\//i.test(url) ? url : `https://${url}`;
   window.open(safeUrl, "_blank", "noopener,noreferrer");
 }
 
-function ensureModal() {
-  let overlay = $("#modal-overlay");
-  if (!overlay) {
-    overlay = document.createElement("div");
-    overlay.id = "modal-overlay";
-    overlay.className = "drawerOverlay";
-    overlay.hidden = true;
-    document.body.appendChild(overlay);
-    overlay.addEventListener("click", closeModal);
-  }
-  let modal = $("#modal-workspace");
-  if (!modal) {
-    modal = document.createElement("section");
-    modal.id = "modal-workspace";
-    modal.className = "modal modalWide";
-    modal.hidden = true;
-    modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-modal", "true");
-    modal.innerHTML = `
-      <div class="modalCard workspaceModalCard">
-        <div class="modalHead workspaceHead">
-          <div>
-            <div class="modalEyebrow" id="workspace-eyebrow">Modulo interno</div>
-            <div class="modalTitle" id="workspace-title">Registro</div>
-            <p class="workspaceSub" id="workspace-subtitle"></p>
-          </div>
-          <button class="btnGhost" id="btn-workspace-close" type="button" aria-label="Cerrar">Cerrar</button>
-        </div>
-        <div class="modalBody workspaceBody">
-          <div id="workspace-content"></div>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    $("#btn-workspace-close", modal)?.addEventListener("click", closeModal);
-  }
-  return modal;
-}
-
-async function closeModal() {
-  await stopQrScanner();
-  const modal = $("#modal-workspace");
-  const overlay = $("#modal-overlay");
-  if (modal) modal.hidden = true;
-  if (overlay) overlay.hidden = true;
-}
-
-function setModalCopy(title, subtitle, eyebrow = "Modulo interno") {
-  ensureModal();
-  $("#workspace-title").textContent = title;
-  $("#workspace-subtitle").textContent = subtitle;
-  $("#workspace-eyebrow").textContent = eyebrow;
-  $("#modal-overlay").hidden = false;
-  $("#modal-workspace").hidden = false;
-}
-
-function insecureContextMsg() {
-  return !window.isSecureContext
-    ? "La camara necesita HTTPS o localhost. En GitHub Pages funciona con HTTPS."
-    : "";
-}
-
-async function listVideoInputs() {
-  if (window.Html5Qrcode?.getCameras) {
-    const cams = await window.Html5Qrcode.getCameras();
-    return cams.map((cam) => ({ id: cam.id || cam.deviceId, label: cam.label || "Camara" }));
-  }
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  return devices.filter((d) => d.kind === "videoinput").map((d) => ({ id: d.deviceId, label: d.label || "Camara" }));
-}
-
-function pickBestCameraId(devices) {
-  const rear = devices.find((d) => /back|trasera|rear|environment/i.test(d.label || ""));
-  return (rear || devices[0] || {}).id || "";
-}
-
-async function populateCameras() {
-  const select = $("#cameraSelect");
-  const result = $("#shift-result");
-  if (!select) return;
-  const devices = await listVideoInputs();
-  select.innerHTML = "";
-  if (!devices.length) {
-    if (result) result.textContent = insecureContextMsg() || "No se detectaron camaras. Revisa permisos.";
-    return;
-  }
-  for (const [index, device] of devices.entries()) {
-    const opt = document.createElement("option");
-    opt.value = device.id;
-    opt.textContent = device.label || `Camara ${index + 1}`;
-    select.appendChild(opt);
-  }
-  currentCameraId = currentCameraId && devices.some((d) => d.id === currentCameraId)
-    ? currentCameraId
-    : pickBestCameraId(devices);
-  select.value = currentCameraId;
-}
-
-async function requestPermissionsAndRefresh() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    stream.getTracks().forEach((track) => track.stop());
-  } catch (_) {
-    const result = $("#shift-result");
-    if (result) result.textContent = insecureContextMsg() || "Concede permiso a la camara en el navegador.";
-  } finally {
-    await populateCameras();
-  }
-}
-
-async function openShiftModal() {
+/* ==========================================================================
+   6b. Vista: Marcar jornada (QR + remoto) — conserva la logica original
+========================================================================== */
+function renderShiftTab() {
   const remoteAllowed = canCurrentUserMarkRemote();
-  setModalCopy(
-    "Registro de jornada",
-    remoteAllowed ? "Escanea QR si estas en sede o marca manualmente si trabajas remoto." : "Para este usuario la jornada se marca desde sede con QR.",
-    "Operacion diaria"
-  );
-  $("#workspace-content").innerHTML = `
-    <section class="shiftTool">
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">Operacion diaria</p>
+        <h2 class="dashTitle">Marcar jornada</h2>
+        <p class="dashSub">${remoteAllowed ? "Escanea el QR en sede o marca manualmente si trabajas remoto." : "Para tu usuario la jornada se marca en sede con QR."}</p>
+      </div>
+    </section>
+    <section class="shiftTool card">
       <div class="shiftPerson">
         <div class="shiftAvatar">${escapeHtml((getProfileName() || "A").slice(0, 1).toUpperCase())}</div>
         <div>
@@ -619,34 +1026,34 @@ async function openShiftModal() {
       <div class="shiftModeGrid${remoteAllowed ? "" : " single"}">
         <button id="btnOnSiteMode" class="shiftModeCard" type="button">
           <span class="modeKicker">Jornada presencial</span>
-          <strong>Estoy en sede &middot; Escanear QR</strong>
+          <strong>Estoy en sede · Escanear QR</strong>
           <small>Escanear QR de ingreso o salida</small>
         </button>
         <button id="btnRemoteMode" class="shiftModeCard remote${remoteAllowed ? "" : " locked"}" type="button" aria-disabled="${remoteAllowed ? "false" : "true"}">
           <span class="modeKicker">Jornada remota</span>
           <strong>Estoy trabajando remoto</strong>
-          <small>${remoteAllowed ? "Marcar inicio o cierre de jornada manualmente" : "Disponible solo para usuarios autorizados"}</small>
+          <small>${remoteAllowed ? "Marcar inicio o cierre manualmente" : "Disponible solo para usuarios autorizados"}</small>
         </button>
       </div>
       <div id="shift-mode-view"></div>
       <div id="today-summary" class="summaryBox"></div>
     </section>
-  `;
+  `);
   wireShiftModeControls();
-  await renderTodaySummary();
+  renderTodaySummary();
 }
 
 function wireShiftModeControls() {
   $("#btnOnSiteMode")?.addEventListener("click", renderOnSiteShiftView);
   $("#btnRemoteMode")?.addEventListener("click", async () => {
-    if (!canCurrentUserMarkRemote()) {
-      toast(remoteNotAllowedMessage(), { ms: 4200 });
-      renderOnSiteShiftView();
-      return;
-    }
+    if (!canCurrentUserMarkRemote()) { toast(remoteNotAllowedMessage(), { ms: 4200, kind: "warn" }); renderOnSiteShiftView(); return; }
     await stopQrScanner();
     renderRemoteShiftView();
   });
+}
+
+function insecureContextMsg() {
+  return !window.isSecureContext ? "La camara necesita HTTPS o localhost. En GitHub Pages funciona con HTTPS." : "";
 }
 
 function renderOnSiteShiftView() {
@@ -661,10 +1068,7 @@ function renderOnSiteShiftView() {
         </div>
       </div>
       <div class="qrControls">
-        <label class="field">
-          <span class="fieldLabel">Camara</span>
-          <select id="cameraSelect" class="input"></select>
-        </label>
+        <label class="field"><span class="fieldLabel">Camara</span><select id="cameraSelect" class="input"></select></label>
         <button id="btnPerms" class="btnGhost" type="button">Permitir/Actualizar</button>
         <button id="btnFlip" class="btnGhost" type="button">Voltear</button>
       </div>
@@ -680,19 +1084,12 @@ function renderOnSiteShiftView() {
     </section>
   `;
   wireShiftControls();
-  populateCameras().catch(() => {
-    $("#shift-result").textContent = insecureContextMsg() || "Error listando camaras.";
-  });
+  populateCameras().catch(() => { $("#shift-result").textContent = insecureContextMsg() || "Error listando camaras."; });
 }
 
 function renderRemoteShiftView() {
-  if (!canCurrentUserMarkRemote()) {
-    toast(remoteNotAllowedMessage(), { ms: 4200 });
-    renderOnSiteShiftView();
-    return;
-  }
-  const now = new Date();
-  const parts = getBogotaParts(now);
+  if (!canCurrentUserMarkRemote()) { toast(remoteNotAllowedMessage(), { ms: 4200, kind: "warn" }); renderOnSiteShiftView(); return; }
+  const parts = getBogotaParts(new Date());
   const host = $("#shift-mode-view");
   if (!host) return;
   host.innerHTML = `
@@ -715,123 +1112,121 @@ function renderRemoteShiftView() {
   $("#btnRemoteSalida")?.addEventListener("click", () => markRemoteShift("salida"));
 }
 
-
 function friendlySaveError(error) {
   if (error?.message === "cancelled") return "No se reemplazo el registro existente.";
   if (error?.message === "remote_not_allowed") return remoteNotAllowedMessage();
-  if (error?.code === "permission-denied") {
-    return "No se pudo guardar: este correo no tiene permiso de escritura en Firestore. Revisa que el correo autorizado sea exactamente el mismo con el que se inicio sesion.";
-  }
-  if (error?.code === "unavailable" || error?.code === "deadline-exceeded") {
-    return "No se pudo guardar por conexion inestable. Intenta de nuevo cuando el celular tenga buena señal.";
-  }
+  if (error?.code === "permission-denied") return "No se pudo guardar: este correo no tiene permiso de escritura en Firestore. Revisa que el correo autorizado sea exactamente el mismo con el que se inicio sesion.";
+  if (error?.code === "unavailable" || error?.code === "deadline-exceeded") return "No se pudo guardar por conexion inestable. Intenta de nuevo cuando el celular tenga buena señal.";
   return "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.";
 }
 
 async function markRemoteShift(type) {
   if (submitLock) return;
-  if (!canCurrentUserMarkRemote()) {
-    toast(remoteNotAllowedMessage(), { ms: 4200 });
-    return;
-  }
+  if (!canCurrentUserMarkRemote()) { toast(remoteNotAllowedMessage(), { ms: 4200, kind: "warn" }); return; }
   const actionText = type === "ingreso" ? "iniciando" : "cerrando";
-  const confirmed = confirm(`Confirmas que estas ${actionText} tu jornada remota en este momento?`);
-  if (!confirmed) return;
+  if (!confirm(`Confirmas que estas ${actionText} tu jornada remota en este momento?`)) return;
   submitLock = true;
   const result = $("#remote-result");
   try {
     const now = new Date();
     const parts = getBogotaParts(now);
     if (result) result.textContent = "Guardando tu marcacion...";
-    await saveShiftRecord({
-      type,
-      raw: "REMOTE_MANUAL",
-      mode: "remoto",
-      source: "manual_remote",
-      date: parts.date,
-      time: parts.time,
-      stamp: now.toISOString()
-    });
+    await saveShiftRecord({ type, raw: "REMOTE_MANUAL", mode: "remoto", source: "manual_remote", date: parts.date, time: parts.time, stamp: now.toISOString() });
     if (result) result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} remoto registrado: ${parts.date} ${parts.time}`;
-    toast("Jornada remota registrada");
+    toast("Jornada remota registrada", { kind: "ok" });
     renderRemoteShiftView();
     await renderTodaySummary();
   } catch (error) {
     if (error?.message !== "cancelled") console.error(error);
     if (result) result.textContent = friendlySaveError(error);
-  } finally {
-    submitLock = false;
-  }
+  } finally { submitLock = false; }
 }
 
+async function listVideoInputs() {
+  if (window.Html5Qrcode?.getCameras) {
+    const cams = await window.Html5Qrcode.getCameras();
+    return cams.map((cam) => ({ id: cam.id || cam.deviceId, label: cam.label || "Camara" }));
+  }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices.filter((d) => d.kind === "videoinput").map((d) => ({ id: d.deviceId, label: d.label || "Camara" }));
+}
+function pickBestCameraId(devices) {
+  const rear = devices.find((d) => /back|trasera|rear|environment/i.test(d.label || ""));
+  return (rear || devices[0] || {}).id || "";
+}
+async function populateCameras() {
+  const select = $("#cameraSelect");
+  const result = $("#shift-result");
+  if (!select) return;
+  const devices = await listVideoInputs();
+  select.innerHTML = "";
+  if (!devices.length) { if (result) result.textContent = insecureContextMsg() || "No se detectaron camaras. Revisa permisos."; return; }
+  for (const [index, device] of devices.entries()) {
+    const opt = document.createElement("option");
+    opt.value = device.id; opt.textContent = device.label || `Camara ${index + 1}`;
+    select.appendChild(opt);
+  }
+  currentCameraId = currentCameraId && devices.some((d) => d.id === currentCameraId) ? currentCameraId : pickBestCameraId(devices);
+  select.value = currentCameraId;
+}
+async function requestPermissionsAndRefresh() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    stream.getTracks().forEach((track) => track.stop());
+  } catch (_) {
+    const result = $("#shift-result");
+    if (result) result.textContent = insecureContextMsg() || "Concede permiso a la camara en el navegador.";
+  } finally { await populateCameras(); }
+}
 function wireShiftControls() {
-  $("#cameraSelect")?.addEventListener("change", (event) => {
-    currentCameraId = event.target.value;
-  });
+  $("#cameraSelect")?.addEventListener("change", (event) => { currentCameraId = event.target.value; });
   $("#btnPerms")?.addEventListener("click", requestPermissionsAndRefresh);
   $("#btnStart")?.addEventListener("click", startQrScanner);
   $("#btnStop")?.addEventListener("click", stopQrScanner);
   $("#btnFlip")?.addEventListener("click", async () => {
     const options = $$("#cameraSelect option").map((opt) => opt.value);
-    if (options.length < 2) {
-      $("#shift-result").textContent = "No encontramos otra camara disponible en este dispositivo.";
-      return;
-    }
+    if (options.length < 2) { $("#shift-result").textContent = "No encontramos otra camara disponible en este dispositivo."; return; }
     const nextId = options[(options.indexOf(currentCameraId) + 1) % options.length];
-    currentCameraId = nextId;
-    $("#cameraSelect").value = nextId;
-    if (qrReader?.isScanning) {
-      await stopQrScanner();
-      await startQrScanner();
-    }
+    currentCameraId = nextId; $("#cameraSelect").value = nextId;
+    if (qrReader?.isScanning) { await stopQrScanner(); await startQrScanner(); }
   });
+}
+
+function normalizeQrText(rawText) {
+  return String(rawText || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function detectShiftType(rawText) {
+  const raw = normalizeQrText(rawText);
+  const compact = raw.replace(/\s+/g, "");
+  if (raw.includes("SALIDA") || compact.includes("ADMSALIDA") || raw.includes("CHECK OUT") || compact.includes("CHECKOUT") || /(^|\W)OUT($|\W)/.test(raw)) return "salida";
+  if (raw.includes("LLEGADA") || raw.includes("INGRESO") || raw.includes("ENTRADA") || compact.includes("ADMLLEGADA") || compact.includes("ADMINGRESO") || raw.includes("CHECK IN") || compact.includes("CHECKIN")) return "ingreso";
+  return "";
 }
 
 async function startQrScanner() {
   const result = $("#shift-result");
-  if (!window.Html5Qrcode) {
-    result.textContent = "No se pudo abrir el lector de QR. Revisa tu conexion a internet e intenta de nuevo.";
-    return;
-  }
+  if (!window.Html5Qrcode) { result.textContent = "No se pudo abrir el lector de QR. Revisa tu conexion a internet e intenta de nuevo."; return; }
   try {
     if (!currentCameraId) await populateCameras();
     if (qrReader) await qrReader.stop().catch(() => null);
     qrReader = new window.Html5Qrcode("reader");
-    try {
-      await qrReader.start(
-        { deviceId: { exact: currentCameraId } },
-        { fps: 10, qrbox: (vw, vh) => ({ width: Math.min(vw, vh) * 0.72, height: Math.min(vw, vh) * 0.72 }) },
-        onScanSuccess,
-        () => {}
-      );
-    } catch (_) {
-      await qrReader.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: (vw, vh) => ({ width: Math.min(vw, vh) * 0.72, height: Math.min(vw, vh) * 0.72 }) },
-        onScanSuccess,
-        () => {}
-      );
-    }
-    $("#btnStart").disabled = true;
-    $("#btnStop").disabled = false;
+    const cfg = { fps: 10, qrbox: (vw, vh) => ({ width: Math.min(vw, vh) * 0.72, height: Math.min(vw, vh) * 0.72 }) };
+    try { await qrReader.start({ deviceId: { exact: currentCameraId } }, cfg, onScanSuccess, () => {}); }
+    catch (_) { await qrReader.start({ facingMode: "environment" }, cfg, onScanSuccess, () => {}); }
+    $("#btnStart").disabled = true; $("#btnStop").disabled = false;
     result.textContent = "Camara activa. Acerca el codigo QR al recuadro.";
   } catch (error) {
     console.error(error);
     result.textContent = insecureContextMsg() || "No pudimos abrir la camara. Revisa el permiso de camara o cierra otras apps que la esten usando.";
   }
 }
-
 async function stopQrScanner() {
   if (!qrReader) return;
-  try {
-    if (qrReader.isScanning) await qrReader.stop();
-    await qrReader.clear();
-  } catch (_) {}
+  try { if (qrReader.isScanning) await qrReader.stop(); await qrReader.clear(); } catch (_) {}
   qrReader = null;
   if ($("#btnStart")) $("#btnStart").disabled = false;
   if ($("#btnStop")) $("#btnStop").disabled = true;
 }
-
 async function onScanSuccess(decodedText) {
   if (submitLock) return;
   submitLock = true;
@@ -841,122 +1236,59 @@ async function onScanSuccess(decodedText) {
     navigator.vibrate?.(20);
     qrReader?.pause?.(true);
     const type = detectShiftType(decodedText);
-    if (!type) {
-      result.textContent = "Este codigo QR no corresponde a la marcacion de jornada. Por favor usa el QR de entrada o salida de la sede.";
-      return;
-    }
+    if (!type) { result.textContent = "Este codigo QR no corresponde a la marcacion de jornada. Por favor usa el QR de entrada o salida de la sede."; return; }
     const now = new Date();
     const parts = getBogotaParts(now);
-    const secondsSinceLastOk = (Date.now() - lastQrSaveOkAt) / 1000;
-    if (secondsSinceLastOk < 8) {
-      result.textContent = "Ya acabamos de guardar una marcacion. Espera unos segundos antes de escanear otra vez.";
-      return;
-    }
+    if ((Date.now() - lastQrSaveOkAt) / 1000 < 8) { result.textContent = "Ya acabamos de guardar una marcacion. Espera unos segundos antes de escanear otra vez."; return; }
     result.textContent = `Registrando ${type === "ingreso" ? "tu ingreso" : "tu salida"}...`;
-    await saveShiftRecord({
-      type,
-      raw: decodedText,
-      mode: "presencial",
-      source: "qr",
-      date: parts.date,
-      time: parts.time,
-      stamp: now.toISOString()
-    });
-    savedOk = true;
-    lastQrSaveOkAt = Date.now();
+    await saveShiftRecord({ type, raw: decodedText, mode: "presencial", source: "qr", date: parts.date, time: parts.time, stamp: now.toISOString() });
+    savedOk = true; lastQrSaveOkAt = Date.now();
     result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} registrado: ${parts.date} ${parts.time}. Camara detenida para evitar registros duplicados.`;
-    toast("Jornada registrada");
+    toast("Jornada registrada", { kind: "ok" });
     await stopQrScanner();
     await renderTodaySummary();
   } catch (error) {
     if (error?.message !== "cancelled") console.error(error);
     result.textContent = friendlySaveError(error);
   } finally {
-    if (!savedOk) {
-      setTimeout(() => {
-        try { if (qrReader?.isScanning) qrReader.resume?.(); } catch (_) {}
-        submitLock = false;
-      }, 900);
-    } else {
-      submitLock = false;
-    }
+    if (!savedOk) { setTimeout(() => { try { if (qrReader?.isScanning) qrReader.resume?.(); } catch (_) {} submitLock = false; }, 900); }
+    else submitLock = false;
   }
 }
 
 async function saveShiftRecord(entry) {
   if (!DB || !ACTIVE_EMAIL) throw new Error("service_not_ready");
-  if ((entry.mode === "remoto" || entry.source === "manual_remote") && !canCurrentUserMarkRemote()) {
-    throw new Error("remote_not_allowed");
-  }
-  const safeEmailId = ACTIVE_EMAIL.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
-  const docId = `${safeEmailId}_${entry.date}`;
+  if ((entry.mode === "remoto" || entry.source === "manual_remote") && !canCurrentUserMarkRemote()) throw new Error("remote_not_allowed");
+  const docId = `${safeEmailId(ACTIVE_EMAIL)}_${entry.date}`;
   const ref = doc(DB, COLLECTIONS.shiftRecords, docId);
   const existingSnap = await getDoc(ref);
   const existing = existingSnap.exists() ? existingSnap.data() : null;
   const existingTime = existing?.[`${entry.type}Time`];
   const replacedExisting = Boolean(existingTime);
   if (existingTime) {
-    const replace = confirm(`Ya existe un ${entry.type} registrado hoy a las ${existingTime}. ¿Quieres reemplazarlo?`);
-    if (!replace) throw new Error("cancelled");
+    if (!confirm(`Ya existe un ${entry.type} registrado hoy a las ${existingTime}. ¿Quieres reemplazarlo?`)) throw new Error("cancelled");
   }
   const mode = entry.mode || "presencial";
   const source = entry.source || "qr";
   const modalidad = mode === "presencial" ? "sede" : mode;
   const clientCreatedAt = new Date().toISOString();
   const base = {
-    role: SHIFT.role,
-    email: ACTIVE_EMAIL,
-    name: getProfileName(),
-    date: entry.date,
-    modalidad,
-    updatedAt: serverTimestamp(),
-    updatedAtClient: Date.now(),
-    appBuild: BUILD
+    role: SHIFT.role, email: ACTIVE_EMAIL, name: getProfileName(), date: entry.date, modalidad,
+    updatedAt: serverTimestamp(), updatedAtClient: Date.now(), appBuild: BUILD
   };
   const typed = {
-    [`${entry.type}Time`]: entry.time,
-    [`${entry.type}Stamp`]: entry.stamp,
-    [`${entry.type}Raw`]: entry.raw,
-    [`${entry.type}ByUid`]: ACTIVE_USER?.uid || "",
-    [`${entry.type}Mode`]: mode,
-    [`${entry.type}Source`]: source,
-    [`${entry.type}Modalidad`]: modalidad
+    [`${entry.type}Time`]: entry.time, [`${entry.type}Stamp`]: entry.stamp, [`${entry.type}Raw`]: entry.raw,
+    [`${entry.type}ByUid`]: ACTIVE_USER?.uid || "", [`${entry.type}Mode`]: mode, [`${entry.type}Source`]: source, [`${entry.type}Modalidad`]: modalidad
   };
   const event = {
-    type: entry.type,
-    mode,
-    modalidad,
-    source,
-    time: entry.time,
-    stamp: entry.stamp,
-    uid: ACTIVE_USER?.uid || "",
-    email: ACTIVE_EMAIL,
-    name: getProfileName(),
-    raw: entry.raw,
-    appBuild: BUILD,
-    clientCreatedAt,
-    clientCreatedAtMs: Date.now()
+    type: entry.type, mode, modalidad, source, time: entry.time, stamp: entry.stamp,
+    uid: ACTIVE_USER?.uid || "", email: ACTIVE_EMAIL, name: getProfileName(), raw: entry.raw,
+    appBuild: BUILD, clientCreatedAt, clientCreatedAtMs: Date.now()
   };
-  const payload = {
-    ...base,
-    ...typed,
-    events: arrayUnion(event)
-  };
-  if (existingSnap.exists()) {
-    await updateDoc(ref, payload);
-  } else {
-    await setDoc(ref, {
-      ...payload,
-      createdAt: serverTimestamp(),
-      createdAtClient: Date.now()
-    });
-  }
-  await sendIngresoEmailNotification({
-    ...event,
-    date: entry.date,
-    docId,
-    replacedExisting
-  });
+  const payload = { ...base, ...typed, events: arrayUnion(event) };
+  if (existingSnap.exists()) await updateDoc(ref, payload);
+  else await setDoc(ref, { ...payload, createdAt: serverTimestamp(), createdAtClient: Date.now() });
+  await sendIngresoEmailNotification({ ...event, date: entry.date, docId, replacedExisting });
 }
 
 async function sendIngresoEmailNotification(event) {
@@ -964,23 +1296,10 @@ async function sendIngresoEmailNotification(event) {
   if (!EMAIL_NOTIFICATION_ENDPOINT || EMAIL_NOTIFICATION_ENDPOINT === "PEGAR_AQUI_URL_WEB_APP_APPS_SCRIPT") return;
   try {
     await fetch(EMAIL_NOTIFICATION_ENDPOINT, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(event),
-      keepalive: true
+      method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(event), keepalive: true
     });
-  } catch (error) {
-    console.warn("No se pudo enviar la notificacion de ingreso por correo", error);
-  }
-}
-
-async function getShiftRecords({ mineOnly = true, max = 60 } = {}) {
-  if (!DB) return [];
-  const clauses = [collection(DB, COLLECTIONS.shiftRecords), orderBy("date", "desc"), limit(max)];
-  if (mineOnly && ACTIVE_EMAIL) clauses.splice(1, 0, where("email", "==", ACTIVE_EMAIL));
-  const snap = await getDocs(query(...clauses));
-  return snap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  } catch (error) { console.warn("No se pudo enviar la notificacion de ingreso por correo", error); }
 }
 
 async function renderTodaySummary() {
@@ -988,11 +1307,7 @@ async function renderTodaySummary() {
   if (!host) return;
   const { date } = getBogotaParts();
   let records = [];
-  try {
-    records = await getShiftRecords({ mineOnly: true, max: 10 });
-  } catch (error) {
-    console.warn(error);
-  }
+  try { records = await getShiftRecords({ mineOnly: true, max: 10 }); } catch (error) { console.warn(error); }
   const today = records.find((record) => record.date === date);
   const ingresoMode = formatShiftMode(today?.ingresoMode, today?.ingresoSource);
   const salidaMode = formatShiftMode(today?.salidaMode, today?.salidaSource);
@@ -1005,56 +1320,748 @@ async function renderTodaySummary() {
   `;
 }
 
-async function openRecordsModal() {
-  setModalCopy("Llegadas registradas", "Aqui puedes revisar tus marcaciones recientes.", "Consulta");
-  $("#workspace-content").innerHTML = `
-    <section class="recordsTool">
-      <div class="recordsToolbar">
-        <button class="btnPrimary" id="btn-my-records" type="button">Mis registros</button>
-        <button class="btnGhost" id="btn-all-records" type="button">Equipo</button>
-      </div>
-      <div id="records-list" class="recordsList">Cargando...</div>
-    </section>
-  `;
-  $("#btn-my-records")?.addEventListener("click", () => renderRecords(true));
-  $("#btn-all-records")?.addEventListener("click", () => renderRecords(false));
-  await renderRecords(true);
+/* ==========================================================================
+   6c. Vista: Registros
+========================================================================== */
+async function getShiftRecords({ mineOnly = true, max = 60 } = {}) {
+  if (!DB) return [];
+  const clauses = [collection(DB, COLLECTIONS.shiftRecords), orderBy("date", "desc"), limit(max)];
+  if (mineOnly && ACTIVE_EMAIL) clauses.splice(1, 0, where("email", "==", ACTIVE_EMAIL));
+  const snap = await getDocs(query(...clauses));
+  return snap.docs.map((item) => ({ id: item.id, ...item.data() }));
 }
 
-async function renderRecords(mineOnly) {
-  const host = $("#records-list");
-  if (!host) return;
-  host.textContent = "Cargando...";
-  try {
-    const records = await getShiftRecords({ mineOnly, max: 80 });
-    if (!records.length) {
-      host.innerHTML = `<div class="emptyState">Aun no hay registros para mostrar.</div>`;
-      return;
-    }
-    host.innerHTML = `
-      <div class="recordTable">
-        <div class="recordRow head">
-          <div>Fecha</div><div>Nombre</div><div>Ingreso</div><div>Salida</div>
-        </div>
-        ${records.map((record) => `
-          <div class="recordRow">
-            <div>${escapeHtml(record.date || "-")}</div>
-            <div>
-              <strong>${escapeHtml(record.name || "-")}</strong>
-              <small>${escapeHtml(record.email || "")}</small>
-            </div>
-            <div>${escapeHtml(record.ingresoTime || "-")}<small>${escapeHtml(formatShiftMode(record.ingresoMode, record.ingresoSource))}</small><small>${escapeHtml(formatDateTime(record.ingresoStamp))}</small></div>
-            <div>${escapeHtml(record.salidaTime || "-")}<small>${escapeHtml(formatShiftMode(record.salidaMode, record.salidaSource))}</small><small>${escapeHtml(formatDateTime(record.salidaStamp))}</small></div>
-          </div>
-        `).join("")}
+let RECORDS_CACHE = [];
+const RECORDS_FILTER = { scope: "mine", member: "all", status: "all", from: "", to: "" };
+
+async function renderRecordsTab() {
+  const admin = isCurrentUserAdmin();
+  await loadAdminData().catch(() => {});
+  if (!admin) RECORDS_FILTER.scope = "mine";
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">Consulta</p>
+        <h2 class="dashTitle">Registros de jornada</h2>
+        <p class="dashSub">Filtra, revisa el estado calculado y abre el detalle de cada marcacion.</p>
       </div>
-    `;
+      <button class="btnGhost btnSmall" type="button" id="btn-export-csv">Exportar CSV</button>
+    </section>
+    <section class="filtersBar card">
+      ${admin ? `
+        <label class="field"><span class="fieldLabel">Alcance</span>
+          <select id="f-scope" class="input">
+            <option value="mine">Mis registros</option>
+            <option value="all" selected>Todo el equipo</option>
+          </select></label>
+        <label class="field"><span class="fieldLabel">Miembro</span>
+          <select id="f-member" class="input"><option value="all">Todos</option>
+            ${adminMemberList().map((m) => `<option value="${escapeHtml(m.email)}">${escapeHtml(m.name)}</option>`).join("")}
+          </select></label>` : ""}
+      <label class="field"><span class="fieldLabel">Estado</span>
+        <select id="f-status" class="input">
+          <option value="all">Todos</option>
+          <option value="puntual">Puntual</option>
+          <option value="tarde">Tarde</option>
+          <option value="ausente">Ausente</option>
+          <option value="incompleto">Incompleto</option>
+          <option value="justificado">Justificado</option>
+          <option value="editado">Editado</option>
+        </select></label>
+      <label class="field"><span class="fieldLabel">Desde</span><input type="date" id="f-from" class="input"></label>
+      <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="f-to" class="input"></label>
+      <button class="btnGhost btnSmall" type="button" id="btn-clear-filters">Limpiar</button>
+    </section>
+    <div id="records-list" class="recordsList">Cargando…</div>
+  `);
+  if (admin) {
+    $("#f-scope").value = RECORDS_FILTER.scope;
+    $("#f-scope").addEventListener("change", (e) => { RECORDS_FILTER.scope = e.target.value; reloadRecords(); });
+    $("#f-member").addEventListener("change", (e) => { RECORDS_FILTER.member = e.target.value; applyRecordsFilter(); });
+  }
+  $("#f-status").addEventListener("change", (e) => { RECORDS_FILTER.status = e.target.value; applyRecordsFilter(); });
+  $("#f-from").addEventListener("change", (e) => { RECORDS_FILTER.from = e.target.value; applyRecordsFilter(); });
+  $("#f-to").addEventListener("change", (e) => { RECORDS_FILTER.to = e.target.value; applyRecordsFilter(); });
+  $("#btn-clear-filters").addEventListener("click", () => {
+    RECORDS_FILTER.member = "all"; RECORDS_FILTER.status = "all"; RECORDS_FILTER.from = ""; RECORDS_FILTER.to = "";
+    if ($("#f-member")) $("#f-member").value = "all";
+    $("#f-status").value = "all"; $("#f-from").value = ""; $("#f-to").value = "";
+    applyRecordsFilter();
+  });
+  $("#btn-export-csv").addEventListener("click", exportRecordsCsv);
+  await reloadRecords();
+}
+
+async function reloadRecords() {
+  const host = $("#records-list");
+  if (host) host.textContent = "Cargando…";
+  try {
+    RECORDS_CACHE = await getShiftRecords({ mineOnly: RECORDS_FILTER.scope === "mine" || !isCurrentUserAdmin(), max: 300 });
   } catch (error) {
     console.error(error);
-    host.innerHTML = `<div class="emptyState">No se pudieron cargar los registros. Revisa tu conexion e intenta de nuevo.</div>`;
+    if (host) host.innerHTML = `<div class="emptyState">No se pudieron cargar los registros. Revisa tu conexion e intenta de nuevo.</div>`;
+    return;
+  }
+  applyRecordsFilter();
+}
+
+function filteredRecords() {
+  return RECORDS_CACHE.filter((r) => {
+    if (RECORDS_FILTER.member !== "all" && r.email !== RECORDS_FILTER.member) return false;
+    if (RECORDS_FILTER.from && r.date < RECORDS_FILTER.from) return false;
+    if (RECORDS_FILTER.to && r.date > RECORDS_FILTER.to) return false;
+    if (RECORDS_FILTER.status !== "all") {
+      const calc = calculateShiftStatus(r, getExpectedScheduleForDate(r.email, r.date));
+      if (RECORDS_FILTER.status === "editado") return calc.edited;
+      if (RECORDS_FILTER.status === "incompleto") return calc.isIncomplete;
+      return calc.status === RECORDS_FILTER.status;
+    }
+    return true;
+  });
+}
+
+function applyRecordsFilter() {
+  const host = $("#records-list");
+  if (!host) return;
+  const admin = isCurrentUserAdmin();
+  const records = filteredRecords();
+  if (!records.length) { host.innerHTML = `<div class="emptyState">Aun no hay registros para este filtro.</div>`; return; }
+  host.innerHTML = `
+    <div class="tableWrap">
+      <table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Miembro</th><th>Ingreso</th><th>Salida</th><th>Modalidad</th><th>Fuente</th><th>Estado</th><th></th></tr></thead>
+        <tbody>
+          ${records.map((r) => {
+            const calc = calculateShiftStatus(r, getExpectedScheduleForDate(r.email, r.date));
+            return `<tr class="${r.voided ? "voidedRow" : ""}">
+              <td data-label="Fecha">${escapeHtml(r.date || "-")}</td>
+              <td data-label="Miembro"><strong>${escapeHtml(r.name || "-")}</strong><small class="cellSub">${escapeHtml(r.email || "")}</small></td>
+              <td data-label="Ingreso">${escapeHtml(r.ingresoTime || "—")}</td>
+              <td data-label="Salida">${escapeHtml(r.salidaTime || "—")}</td>
+              <td data-label="Modalidad">${escapeHtml(r.modalidad || "—")}</td>
+              <td data-label="Fuente">${escapeHtml(sourceLabel(r.ingresoSource || r.salidaSource))}</td>
+              <td data-label="Estado">${statusBadge(calc)}</td>
+              <td data-label="" class="cellActions">
+                <button class="linkBtn" type="button" data-detail="${escapeHtml(r.id)}">Ver</button>
+                ${admin ? `<button class="linkBtn" type="button" data-edit="${escapeHtml(r.id)}">Editar</button>` : ""}
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+  $$("[data-detail]", host).forEach((b) => b.addEventListener("click", () => openRecordDetail(b.dataset.detail)));
+  $$("[data-edit]", host).forEach((b) => b.addEventListener("click", () => openEditRecordModal(b.dataset.edit)));
+}
+
+function exportRecordsCsv() {
+  const records = filteredRecords();
+  if (!records.length) { toast("No hay registros para exportar."); return; }
+  const headers = ["Fecha", "Nombre", "Correo", "Ingreso", "Salida", "Modalidad", "Fuente", "Estado", "MinutosTarde", "MinutosTrabajados", "Editado", "Justificado"];
+  const rows = records.map((r) => {
+    const calc = calculateShiftStatus(r, getExpectedScheduleForDate(r.email, r.date));
+    return [r.date, r.name, r.email, r.ingresoTime || "", r.salidaTime || "", r.modalidad || "", sourceLabel(r.ingresoSource || r.salidaSource), calc.label, calc.lateMinutes, calc.workedMinutes ?? "", calc.edited ? "si" : "no", calc.justified ? "si" : "no"];
+  });
+  const csv = [headers, ...rows].map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  downloadFile(`registros-musicala-${todayBogota()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
+  toast("CSV exportado", { kind: "ok" });
+}
+
+function downloadFile(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+/* ==========================================================================
+   7. Modales: detalle / edicion / excepciones / horario
+========================================================================== */
+function ensureModal() {
+  let overlay = $("#modal-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "modal-overlay"; overlay.className = "drawerOverlay"; overlay.hidden = true;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", closeModal);
+  }
+  let modal = $("#modal-workspace");
+  if (!modal) {
+    modal = document.createElement("section");
+    modal.id = "modal-workspace"; modal.className = "modal modalWide"; modal.hidden = true;
+    modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true");
+    modal.innerHTML = `
+      <div class="modalCard workspaceModalCard">
+        <div class="modalHead workspaceHead">
+          <div>
+            <div class="modalEyebrow" id="workspace-eyebrow">Modulo interno</div>
+            <div class="modalTitle" id="workspace-title">Registro</div>
+            <p class="workspaceSub" id="workspace-subtitle"></p>
+          </div>
+          <button class="btnGhost" id="btn-workspace-close" type="button" aria-label="Cerrar">Cerrar</button>
+        </div>
+        <div class="modalBody workspaceBody"><div id="workspace-content"></div></div>
+      </div>`;
+    document.body.appendChild(modal);
+    $("#btn-workspace-close", modal)?.addEventListener("click", closeModal);
+  }
+  return modal;
+}
+async function closeModal() {
+  const modal = $("#modal-workspace");
+  const overlay = $("#modal-overlay");
+  if (modal) modal.hidden = true;
+  if (overlay) overlay.hidden = true;
+}
+function openModal(title, subtitle, eyebrow, html) {
+  ensureModal();
+  $("#workspace-title").textContent = title;
+  $("#workspace-subtitle").textContent = subtitle;
+  $("#workspace-eyebrow").textContent = eyebrow;
+  $("#workspace-content").innerHTML = html;
+  $("#modal-overlay").hidden = false;
+  $("#modal-workspace").hidden = false;
+}
+
+function findRecord(id) { return RECORDS_CACHE.find((r) => r.id === id); }
+
+async function openRecordDetail(id) {
+  const r = findRecord(id);
+  if (!r) { toast("No se encontro el registro."); return; }
+  const schedule = getExpectedScheduleForDate(r.email, r.date);
+  const calc = calculateShiftStatus(r, schedule);
+  const history = Array.isArray(r.correctionHistory) ? r.correctionHistory : [];
+  openModal("Detalle del registro", `${r.name} · ${r.date}`, "Consulta", `
+    <div class="detailGrid">
+      ${detailItem("Fecha", formatLongDate(r.date))}
+      ${detailItem("Estado", calc.label)}
+      ${detailItem("Ingreso", r.ingresoTime || "—")}
+      ${detailItem("Salida", r.salidaTime || "—")}
+      ${detailItem("Modalidad", r.modalidad || "—")}
+      ${detailItem("Fuente ingreso", sourceLabel(r.ingresoSource))}
+      ${detailItem("Hora esperada", schedule ? `${schedule.start} – ${schedule.end} (${schedule.modality})${schedule.source === "override" ? " · excepcion" : ""}` : "Sin horario")}
+      ${detailItem("Minutos tarde", calc.lateMinutes)}
+      ${detailItem("Trabajado", minutesToHhmm(calc.workedMinutes))}
+      ${detailItem("Esperado", minutesToHhmm(calc.expectedMinutes))}
+    </div>
+    ${r.adminNotes ? `<div class="noteBox"><strong>Nota administrativa:</strong> ${escapeHtml(r.adminNotes)}</div>` : ""}
+    ${r.voided ? `<div class="noteBox warn"><strong>Registro anulado.</strong> ${escapeHtml(r.voidReason || "")} (${escapeHtml(r.voidedBy || "")})</div>` : ""}
+    ${calc.edited ? `<div class="noteBox info"><strong>Registro corregido.</strong> ${escapeHtml(r.correctionReason || "")} — ${escapeHtml(r.correctedBy || "")}</div>` : ""}
+    <h4 class="sectionH">Historial de correcciones (${history.length})</h4>
+    ${history.length ? `<div class="historyList">${history.slice().reverse().map((h) => `
+      <div class="historyItem">
+        <div class="historyTop"><strong>${escapeHtml(h.correctedBy || "")}</strong><span>${escapeHtml(h.correctedAtClient ? formatDateTime(new Date(h.correctedAtClient).toISOString()) : "")}</span></div>
+        <div class="historyReason">${escapeHtml(h.reason || "")}</div>
+        <div class="historyDiff">Ingreso: ${escapeHtml(h.previousData?.ingresoTime || "—")} → ${escapeHtml(h.newData?.ingresoTime || "—")} · Salida: ${escapeHtml(h.previousData?.salidaTime || "—")} → ${escapeHtml(h.newData?.salidaTime || "—")}</div>
+      </div>`).join("")}</div>` : `<div class="emptyState">Este registro no tiene correcciones.</div>`}
+    ${isCurrentUserAdmin() ? `<div class="modalActions"><button class="btnPrimary" type="button" id="btn-go-edit">Editar / corregir</button></div>` : ""}
+  `);
+  $("#btn-go-edit")?.addEventListener("click", () => openEditRecordModal(id));
+}
+
+function detailItem(label, value) {
+  return `<div class="detailItem"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
+}
+
+async function openEditRecordModal(id) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos para editar registros.", { kind: "warn" }); return; }
+  const r = findRecord(id);
+  if (!r) { toast("No se encontro el registro."); return; }
+  openModal("Editar / corregir registro", `${r.name} · ${r.date}`, "Correccion admin", `
+    <p class="modalNote">Editar este registro <strong>no cambia</strong> el horario semanal de la persona. Solo corrige esta marcacion puntual.</p>
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Hora de ingreso (HH:mm)</span><input type="time" id="e-ingreso" class="input" value="${escapeHtml(r.ingresoTime || "")}"></label>
+      <label class="field"><span class="fieldLabel">Hora de salida (HH:mm)</span><input type="time" id="e-salida" class="input" value="${escapeHtml(r.salidaTime || "")}"></label>
+      <label class="field"><span class="fieldLabel">Modalidad del dia</span>
+        <select id="e-modalidad" class="input">
+          ${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${(r.modalidad || "sede") === m ? "selected" : ""}>${m}</option>`).join("")}
+        </select></label>
+      <label class="field"><span class="fieldLabel">Estado manual</span>
+        <select id="e-status" class="input">
+          <option value="">Automatico (calculado)</option>
+          <option value="justificado" ${r.statusOverride === "justificado" ? "selected" : ""}>Justificado</option>
+        </select></label>
+    </div>
+    <label class="field checkField"><input type="checkbox" id="e-justified" ${r.statusOverride === "justificado" ? "checked" : ""}> <span>Marcar como justificado</span></label>
+    <label class="field"><span class="fieldLabel">Nota administrativa</span><textarea id="e-notes" class="input" rows="2">${escapeHtml(r.adminNotes || "")}</textarea></label>
+    <label class="field"><span class="fieldLabel">Motivo de la correccion (obligatorio)</span><textarea id="e-reason" class="input" rows="2" placeholder="Ej: ese dia se autorizo ingreso diferente por reunion externa."></textarea></label>
+    <div class="modalActions">
+      ${r.voided ? "" : `<button class="btnDanger" type="button" id="btn-void">Anular registro</button>`}
+      <button class="btnGhost" type="button" id="btn-cancel-edit">Cancelar</button>
+      <button class="btnPrimary" type="button" id="btn-save-edit">Guardar correccion</button>
+    </div>
+  `);
+  $("#btn-cancel-edit")?.addEventListener("click", closeModal);
+  $("#btn-save-edit")?.addEventListener("click", async () => {
+    const reason = $("#e-reason").value.trim();
+    if (!reason) { toast("Escribe el motivo de la correccion.", { kind: "warn" }); return; }
+    const justified = $("#e-justified").checked || $("#e-status").value === "justificado";
+    const patch = {
+      ingresoTime: $("#e-ingreso").value || "",
+      salidaTime: $("#e-salida").value || "",
+      modalidad: $("#e-modalidad").value,
+      adminNotes: $("#e-notes").value.trim(),
+      statusOverride: justified ? "justificado" : ""
+    };
+    if (!confirm("¿Confirmas guardar esta correccion del registro?")) return;
+    await saveRecordCorrection(id, patch, reason);
+  });
+  $("#btn-void")?.addEventListener("click", async () => {
+    const reason = $("#e-reason").value.trim() || prompt("Motivo de anulacion:") || "";
+    if (!reason) { toast("Indica el motivo de la anulacion.", { kind: "warn" }); return; }
+    if (!confirm("¿Seguro que quieres anular este registro? No se borra, queda marcado como anulado.")) return;
+    await voidRecord(id, reason);
+  });
+}
+
+async function saveRecordCorrection(id, patch, reason) {
+  const r = findRecord(id);
+  if (!r) return;
+  try {
+    const ref = doc(DB, COLLECTIONS.shiftRecords, id);
+    const previousData = { ingresoTime: r.ingresoTime || "", salidaTime: r.salidaTime || "", modalidad: r.modalidad || "", statusOverride: r.statusOverride || "" };
+    const newData = { ingresoTime: patch.ingresoTime, salidaTime: patch.salidaTime, modalidad: patch.modalidad, statusOverride: patch.statusOverride };
+    await updateDoc(ref, {
+      ...patch,
+      manualCorrection: true,
+      correctionReason: reason,
+      correctedBy: ACTIVE_EMAIL,
+      correctedAtClient: Date.now(),
+      correctedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      updatedAtClient: Date.now(),
+      correctionHistory: arrayUnion({ correctedBy: ACTIVE_EMAIL, correctedAtClient: Date.now(), previousData, newData, reason })
+    });
+    Object.assign(r, patch, { manualCorrection: true, correctionReason: reason, correctedBy: ACTIVE_EMAIL });
+    toast("Registro corregido", { kind: "ok" });
+    await closeModal();
+    applyRecordsFilter();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar la correccion.", { kind: "warn" });
   }
 }
 
+async function voidRecord(id, reason) {
+  const r = findRecord(id);
+  if (!r) return;
+  try {
+    await updateDoc(doc(DB, COLLECTIONS.shiftRecords, id), {
+      voided: true, voidReason: reason, voidedBy: ACTIVE_EMAIL, voidedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(), updatedAtClient: Date.now(),
+      correctionHistory: arrayUnion({ correctedBy: ACTIVE_EMAIL, correctedAtClient: Date.now(), reason: `ANULACION: ${reason}`, previousData: {}, newData: { voided: true } })
+    });
+    Object.assign(r, { voided: true, voidReason: reason, voidedBy: ACTIVE_EMAIL });
+    toast("Registro anulado", { kind: "ok" });
+    await closeModal();
+    applyRecordsFilter();
+  } catch (error) {
+    console.error(error);
+    toast("No se pudo anular el registro.", { kind: "warn" });
+  }
+}
+
+/* ==========================================================================
+   6d. Vista: Estadisticas (admin)
+========================================================================== */
+const STATS_FILTER = { preset: "month", from: "", to: "", member: "all", modality: "all", status: "all" };
+
+function presetRange(preset) {
+  const today = todayBogota();
+  if (preset === "today") return { from: today, to: today };
+  if (preset === "week") {
+    const idx = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // lunes=0
+    return { from: addDaysStr(today, -idx), to: today };
+  }
+  if (preset === "month") return { from: today.slice(0, 8) + "01", to: today };
+  return { from: STATS_FILTER.from || today, to: STATS_FILTER.to || today };
+}
+
+async function renderAdminStats() {
+  if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
+  setPanel(`<div class="loadingBlock">Cargando estadisticas…</div>`);
+  await loadAdminData({ force: true }).catch(() => {});
+  let records = [];
+  try { records = await getShiftRecords({ mineOnly: false, max: 1000 }); } catch (_) {}
+  STATS_RECORDS = records;
+  renderStatsUI();
+}
+
+let STATS_RECORDS = [];
+
+function renderStatsUI() {
+  const r = presetRange(STATS_FILTER.preset);
+  STATS_FILTER.from = r.from; STATS_FILTER.to = r.to;
+  const stats = calculateStats(STATS_RECORDS, { from: r.from, to: r.to, memberFilter: STATS_FILTER.member, modalityFilter: STATS_FILTER.modality, statusFilter: STATS_FILTER.status });
+  const g = stats.global;
+  const bestMembers = stats.memberRows.filter((m) => m.onTime + m.late > 0).sort((a, b) => b.punctualityPct - a.punctualityPct);
+  const worstByLate = stats.memberRows.slice().sort((a, b) => b.late - a.late).filter((m) => m.late > 0);
+  const worstDays = stats.dayRows.slice().sort((a, b) => (b.late + b.absent) - (a.late + a.absent)).filter((d) => d.late + d.absent > 0).slice(0, 5);
+
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">Panel admin</p>
+        <h2 class="dashTitle">Estadisticas de puntualidad</h2>
+        <p class="dashSub">${escapeHtml(formatLongDate(r.from))} → ${escapeHtml(formatLongDate(r.to))}</p>
+      </div>
+      <div class="headActions">
+        <button class="btnGhost btnSmall" type="button" id="btn-copy-summary">Copiar resumen</button>
+        <button class="btnGhost btnSmall" type="button" id="btn-copy-report">Copiar reporte</button>
+      </div>
+    </section>
+
+    <section class="filtersBar card">
+      <div class="segMenu" id="seg-preset">
+        ${[["today", "Hoy"], ["week", "Semana"], ["month", "Mes"], ["custom", "Personalizado"]].map(([v, l]) => `<button class="segBtn${STATS_FILTER.preset === v ? " active" : ""}" data-preset="${v}" type="button">${l}</button>`).join("")}
+      </div>
+      <label class="field"><span class="fieldLabel">Desde</span><input type="date" id="s-from" class="input" value="${escapeHtml(r.from)}" ${STATS_FILTER.preset !== "custom" ? "disabled" : ""}></label>
+      <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="s-to" class="input" value="${escapeHtml(r.to)}" ${STATS_FILTER.preset !== "custom" ? "disabled" : ""}></label>
+      <label class="field"><span class="fieldLabel">Miembro</span>
+        <select id="s-member" class="input"><option value="all">Todos</option>
+          ${adminMemberList().map((m) => `<option value="${escapeHtml(m.email)}" ${STATS_FILTER.member === m.email ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
+        </select></label>
+      <label class="field"><span class="fieldLabel">Modalidad</span>
+        <select id="s-modality" class="input">
+          ${[["all", "Todas"], ["sede", "Sede"], ["remoto", "Remoto"]].map(([v, l]) => `<option value="${v}" ${STATS_FILTER.modality === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select></label>
+    </section>
+
+    <section class="kpiGrid wide">
+      ${kpiCard("Puntualidad global", g.punctualityPct + "%", `${g.onTime} puntuales / ${g.late} tarde`, g.punctualityPct >= 80 ? "ok" : "warn")}
+      ${kpiCard("Jornadas esperadas", g.expectedDays, `${g.registeredDays} registradas (${g.attendancePct}%)`, "")}
+      ${kpiCard("Llegadas tarde", g.late, `prom. ${g.avgLateMinutes} min`, g.late ? "late" : "ok")}
+      ${kpiCard("Ausencias", g.absent, "segun horario", g.absent ? "absent" : "ok")}
+      ${kpiCard("Jornadas incompletas", g.incompleteDays, "sin salida", g.incompleteDays ? "warn" : "ok")}
+      ${kpiCard("Horas trabajadas", minutesToHhmm(g.totalWorkedMinutes), "registradas", "")}
+      ${kpiCard("Minutos tarde", g.totalLateMinutes, "acumulados", "")}
+      ${kpiCard("Hora prom. llegada", g.avgArrival, "promedio del equipo", "")}
+      ${kpiCard("Salidas tempranas", g.leftEarly, "antes de lo esperado", g.leftEarly ? "warn" : "ok")}
+      ${kpiCard("Justificados", g.justified, "registros", "info")}
+    </section>
+
+    <div class="dashCols">
+      <section class="dashSection card">
+        <h3 class="sectionH">🏆 Mejor puntualidad</h3>
+        ${bestMembers.length ? `<div class="rankList">${bestMembers.slice(0, 5).map((m, i) => rankRow(i + 1, m.name, m.punctualityPct + "%", barHtml(m.punctualityPct, "ok"))).join("")}</div>` : `<div class="emptyState">Sin datos suficientes.</div>`}
+      </section>
+      <section class="dashSection card">
+        <h3 class="sectionH">⏰ Mas llegadas tarde</h3>
+        ${worstByLate.length ? `<div class="rankList">${worstByLate.slice(0, 5).map((m, i) => rankRow(i + 1, m.name, m.late + " tarde", barHtml(maxPct(m.late, worstByLate[0].late), "late"))).join("")}</div>` : `<div class="emptyState">Sin llegadas tarde en el periodo. 👌</div>`}
+      </section>
+    </div>
+
+    <section class="dashSection">
+      <h3 class="sectionH">Resumen por miembro</h3>
+      <div class="tableWrap">
+        <table class="dataTable">
+          <thead><tr><th>Miembro</th><th>Esper.</th><th>Reg.</th><th>Punt.</th><th>Tarde</th><th>Ausen.</th><th>Incompl.</th><th>Min tarde</th><th>% Punt.</th><th>Prom. lleg.</th><th>Horas</th></tr></thead>
+          <tbody>
+            ${stats.memberRows.map((m) => `<tr>
+              <td data-label="Miembro"><strong>${escapeHtml(m.name)}</strong></td>
+              <td data-label="Esper.">${m.expected}</td>
+              <td data-label="Reg.">${m.registered}</td>
+              <td data-label="Punt.">${m.onTime}</td>
+              <td data-label="Tarde">${m.late}</td>
+              <td data-label="Ausen.">${m.absent}</td>
+              <td data-label="Incompl.">${m.incomplete}</td>
+              <td data-label="Min tarde">${m.lateMinutes}</td>
+              <td data-label="% Punt."><span class="badgeChip ${m.punctualityPct >= 80 ? "ok" : (m.punctualityPct >= 60 ? "warn" : "late")}">${m.punctualityPct}%</span></td>
+              <td data-label="Prom. lleg.">${escapeHtml(m.avgArrival)}</td>
+              <td data-label="Horas">${minutesToHhmm(m.workedMinutes)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">📅 Dias con mas problemas de puntualidad</h3>
+      ${worstDays.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Esperados</th><th>Puntuales</th><th>Tarde</th><th>Ausentes</th><th>Incompletos</th></tr></thead>
+        <tbody>${worstDays.map((d) => `<tr>
+          <td data-label="Fecha">${escapeHtml(d.date)}</td><td data-label="Esperados">${d.expected}</td>
+          <td data-label="Puntuales">${d.onTime}</td><td data-label="Tarde"><span class="badgeChip ${d.late ? "late" : "ok"}">${d.late}</span></td>
+          <td data-label="Ausentes"><span class="badgeChip ${d.absent ? "absent" : "ok"}">${d.absent}</span></td><td data-label="Incompletos">${d.incomplete}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay dias con problemas en el periodo. 🎉</div>`}
+    </section>
+  `);
+  wireStatsControls();
+  $("#btn-copy-summary").addEventListener("click", () => copyStatsSummary(stats, r));
+  $("#btn-copy-report").addEventListener("click", () => copyStatsReport(stats, r, bestMembers));
+}
+
+function maxPct(v, max) { return max ? Math.round((v / max) * 100) : 0; }
+function barHtml(pct, tone) { return `<div class="bar"><div class="barFill ${tone}" style="width:${Math.max(3, Math.min(100, pct))}%"></div></div>`; }
+function rankRow(pos, name, value, bar) {
+  return `<div class="rankRow"><span class="rankPos">${pos}</span><div class="rankBody"><div class="rankTop"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>${bar}</div></div>`;
+}
+
+function wireStatsControls() {
+  $("#seg-preset")?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-preset]");
+    if (!b) return;
+    STATS_FILTER.preset = b.dataset.preset;
+    renderStatsUI();
+  });
+  $("#s-from")?.addEventListener("change", (e) => { STATS_FILTER.from = e.target.value; STATS_FILTER.preset = "custom"; renderStatsUI(); });
+  $("#s-to")?.addEventListener("change", (e) => { STATS_FILTER.to = e.target.value; STATS_FILTER.preset = "custom"; renderStatsUI(); });
+  $("#s-member")?.addEventListener("change", (e) => { STATS_FILTER.member = e.target.value; renderStatsUI(); });
+  $("#s-modality")?.addEventListener("change", (e) => { STATS_FILTER.modality = e.target.value; renderStatsUI(); });
+}
+
+async function copyText(text, okMsg) {
+  try { await navigator.clipboard.writeText(text); toast(okMsg || "Copiado", { kind: "ok" }); }
+  catch (_) { toast("No se pudo copiar automaticamente."); }
+}
+function copyStatsSummary(stats, r) {
+  const g = stats.global;
+  const lines = [
+    `Resumen Musicala (${r.from} a ${r.to})`,
+    `Jornadas esperadas: ${g.expectedDays} · registradas: ${g.registeredDays} (${g.attendancePct}%)`,
+    `Puntualidad global: ${g.punctualityPct}% · Puntuales: ${g.onTime} · Tarde: ${g.late}`,
+    `Ausencias: ${g.absent} · Incompletas: ${g.incompleteDays} · Salidas tempranas: ${g.leftEarly}`,
+    `Minutos tarde acumulados: ${g.totalLateMinutes} (prom ${g.avgLateMinutes}) · Horas trabajadas: ${minutesToHhmm(g.totalWorkedMinutes)}`,
+    `Hora promedio de llegada: ${g.avgArrival}`
+  ];
+  copyText(lines.join("\n"), "Resumen copiado");
+}
+function copyStatsReport(stats, r, best) {
+  const g = stats.global;
+  const top = best.slice(0, 3).map((m) => `${m.name} (${m.punctualityPct}%)`).join(", ") || "sin datos";
+  const report = `Durante el periodo del ${r.from} al ${r.to} se esperaban ${g.expectedDays} jornadas. Se registraron ${g.registeredDays} (${g.attendancePct}% de asistencia), de las cuales ${g.completeDays} fueron jornadas completas. La puntualidad global fue del ${g.punctualityPct}%, con ${g.late} llegadas tarde (promedio de ${g.avgLateMinutes} minutos) y ${g.absent} ausencias detectadas segun horario. Se acumularon ${minutesToHhmm(g.totalWorkedMinutes)} de trabajo registrado. Los miembros con mayor cumplimiento fueron: ${top}.`;
+  copyText(report, "Reporte copiado");
+}
+
+/* ==========================================================================
+   6e. Vista: Configuracion (horarios por miembro) — admin
+========================================================================== */
+async function renderConfigTab() {
+  if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
+  setPanel(`<div class="loadingBlock">Cargando configuracion…</div>`);
+  await loadAdminData({ force: true }).catch(() => {});
+  const members = adminMemberList();
+  CONFIG_EMAIL = CONFIG_EMAIL && members.some((m) => m.email === CONFIG_EMAIL) ? CONFIG_EMAIL : (members[0]?.email || "");
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">Panel admin</p>
+        <h2 class="dashTitle">Configuracion de horarios</h2>
+        <p class="dashSub">Define el horario semanal de cada miembro y las excepciones por fecha.</p>
+      </div>
+    </section>
+    <section class="filtersBar card">
+      <label class="field"><span class="fieldLabel">Miembro</span>
+        <select id="cfg-member" class="input">
+          ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
+        </select></label>
+      <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepcion por fecha</button>
+    </section>
+    <div id="cfg-body"></div>
+  `);
+  $("#cfg-member").addEventListener("change", (e) => { CONFIG_EMAIL = e.target.value; renderMemberSettings(); });
+  $("#cfg-add-override").addEventListener("click", () => openOverrideModal(CONFIG_EMAIL));
+  renderMemberSettings();
+}
+
+let CONFIG_EMAIL = "";
+
+function renderMemberSettings() {
+  const host = $("#cfg-body");
+  if (!host) return;
+  const s = MEMBER_SETTINGS[CONFIG_EMAIL] || defaultSettingsFor(CONFIG_EMAIL, { seeded: true });
+  const overrides = Object.values(SCHEDULE_OVERRIDES).filter((o) => o.email === CONFIG_EMAIL).sort((a, b) => b.date.localeCompare(a.date));
+  host.innerHTML = `
+    <section class="card cfgCard">
+      <div class="cfgHead">
+        <div class="formGrid">
+          <label class="field"><span class="fieldLabel">Nombre</span><input type="text" id="m-name" class="input" value="${escapeHtml(s.name || "")}"></label>
+          <label class="field"><span class="fieldLabel">Correo</span><input type="text" class="input" value="${escapeHtml(s.email)}" disabled></label>
+          <label class="field"><span class="fieldLabel">Rol</span>
+            <select id="m-role" class="input"><option value="member" ${s.role !== "admin" ? "selected" : ""}>Miembro</option><option value="admin" ${s.role === "admin" ? "selected" : ""}>Admin</option></select></label>
+          <label class="field"><span class="fieldLabel">Gracia por defecto (min)</span><input type="number" id="m-grace" class="input" min="0" max="120" value="${s.defaultGraceMinutes}"></label>
+        </div>
+        <div class="cfgToggles">
+          <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
+          <label class="field checkField"><input type="checkbox" id="m-remote" ${s.canWorkRemote ? "checked" : ""}> <span>Puede marcar remoto</span></label>
+        </div>
+      </div>
+
+      <h3 class="sectionH">Horario semanal</h3>
+      <div class="weekGrid">
+        ${WEEK_DAYS.map((d) => {
+          const day = s.weeklySchedule[d.key];
+          return `<div class="dayCard ${day.enabled ? "on" : "off"}" data-day="${d.key}">
+            <div class="dayHead">
+              <strong>${escapeHtml(d.label)}</strong>
+              <label class="switch"><input type="checkbox" class="day-enabled" ${day.enabled ? "checked" : ""}><span></span></label>
+            </div>
+            <div class="dayFields">
+              <label class="field mini"><span class="fieldLabel">Ingreso</span><input type="time" class="input day-start" value="${escapeHtml(day.start)}"></label>
+              <label class="field mini"><span class="fieldLabel">Salida</span><input type="time" class="input day-end" value="${escapeHtml(day.end)}"></label>
+              <label class="field mini"><span class="fieldLabel">Modalidad</span>
+                <select class="input day-modality">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${day.modality === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
+              <label class="field mini"><span class="fieldLabel">Gracia</span><input type="number" class="input day-grace" min="0" max="120" value="${day.graceMinutes}"></label>
+            </div>
+            <input type="text" class="input day-notes" placeholder="Notas (opcional)" value="${escapeHtml(day.notes || "")}">
+          </div>`;
+        }).join("")}
+      </div>
+      <div class="modalActions">
+        <button class="btnPrimary" type="button" id="btn-save-settings">Guardar horario</button>
+      </div>
+    </section>
+
+    <section class="card cfgCard">
+      <h3 class="sectionH">Excepciones de horario (${overrides.length})</h3>
+      <p class="modalNote">Las excepciones aplican solo a una fecha concreta y tienen prioridad sobre el horario semanal.</p>
+      ${overrides.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Modalidad</th><th>Motivo</th></tr></thead>
+        <tbody>${overrides.map((o) => `<tr>
+          <td data-label="Fecha">${escapeHtml(o.date)}</td>
+          <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Dia libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
+          <td data-label="Horario">${o.enabled === false ? "—" : `${escapeHtml(o.start || "")} – ${escapeHtml(o.end || "")}`}</td>
+          <td data-label="Modalidad">${escapeHtml(o.modality || "—")}</td>
+          <td data-label="Motivo">${escapeHtml(o.reason || "")}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay excepciones para este miembro.</div>`}
+    </section>
+  `;
+  $("#btn-save-settings").addEventListener("click", saveMemberSettings);
+  $$(".day-enabled", host).forEach((chk) => chk.addEventListener("change", (e) => {
+    e.target.closest(".dayCard").classList.toggle("on", e.target.checked);
+    e.target.closest(".dayCard").classList.toggle("off", !e.target.checked);
+  }));
+}
+
+async function saveMemberSettings() {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  const host = $("#cfg-body");
+  const weekly = {};
+  $$(".dayCard", host).forEach((card) => {
+    const key = card.dataset.day;
+    weekly[key] = {
+      enabled: $(".day-enabled", card).checked,
+      start: $(".day-start", card).value || DEFAULT_DAY.start,
+      end: $(".day-end", card).value || DEFAULT_DAY.end,
+      modality: $(".day-modality", card).value,
+      graceMinutes: Number($(".day-grace", card).value) || 0,
+      notes: $(".day-notes", card).value.trim()
+    };
+  });
+  const payload = {
+    email: CONFIG_EMAIL,
+    name: $("#m-name").value.trim(),
+    role: $("#m-role").value,
+    active: $("#m-active").checked,
+    canWorkRemote: $("#m-remote").checked,
+    defaultGraceMinutes: Number($("#m-grace").value) || 0,
+    weeklySchedule: weekly,
+    updatedAt: serverTimestamp(),
+    updatedAtClient: Date.now(),
+    updatedBy: ACTIVE_EMAIL
+  };
+  if (!confirm("¿Guardar el horario de este miembro?")) return;
+  try {
+    await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
+    MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings(payload);
+    toast("Configuracion guardada", { kind: "ok" });
+    renderMemberSettings();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar la configuracion.", { kind: "warn" });
+  }
+}
+
+function openOverrideModal(email) {
+  const name = getProfileName(email);
+  openModal("Nueva excepcion de horario", `${name}`, "Excepcion por fecha", `
+    <p class="modalNote">Define un horario distinto para una fecha concreta. No cambia el horario semanal.</p>
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Fecha</span><input type="date" id="o-date" class="input" value="${todayBogota()}"></label>
+      <label class="field checkField"><input type="checkbox" id="o-enabled" checked> <span>Trabaja ese dia</span></label>
+      <label class="field"><span class="fieldLabel">Ingreso</span><input type="time" id="o-start" class="input" value="10:00"></label>
+      <label class="field"><span class="fieldLabel">Salida</span><input type="time" id="o-end" class="input" value="16:00"></label>
+      <label class="field"><span class="fieldLabel">Modalidad</span>
+        <select id="o-modality" class="input">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}">${m}</option>`).join("")}</select></label>
+      <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="5"></label>
+    </div>
+    <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunion externa autorizada"></label>
+    <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">Crear excepcion</button></div>
+  `);
+  $("#o-cancel").addEventListener("click", closeModal);
+  $("#o-save").addEventListener("click", async () => {
+    const date = $("#o-date").value;
+    if (!date) { toast("Indica la fecha.", { kind: "warn" }); return; }
+    const payload = {
+      email, date, enabled: $("#o-enabled").checked,
+      start: $("#o-start").value, end: $("#o-end").value,
+      modality: $("#o-modality").value, graceMinutes: Number($("#o-grace").value) || 0,
+      reason: $("#o-reason").value.trim(), createdBy: ACTIVE_EMAIL, createdAt: serverTimestamp(), createdAtClient: Date.now()
+    };
+    if (!confirm("¿Crear esta excepcion de horario?")) return;
+    try {
+      const id = `${safeEmailId(email)}_${date}`;
+      await setDoc(doc(DB, COLLECTIONS.scheduleOverrides, id), payload, { merge: true });
+      SCHEDULE_OVERRIDES[`${email}__${date}`] = { id, ...payload };
+      toast("Excepcion creada", { kind: "ok" });
+      await closeModal();
+      renderMemberSettings();
+    } catch (error) {
+      console.error(error);
+      toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo crear la excepcion.", { kind: "warn" });
+    }
+  });
+}
+
+/* ==========================================================================
+   6f. Vista: Equipo — admin
+========================================================================== */
+async function renderTeamTab() {
+  if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
+  await loadAdminData({ force: true }).catch(() => {});
+  const members = adminMemberList();
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">Panel admin</p>
+        <h2 class="dashTitle">Equipo</h2>
+        <p class="dashSub">Miembros, roles, modalidad y horario configurado.</p>
+      </div>
+    </section>
+    <section class="teamGrid">
+      ${members.map((m) => {
+        const s = m.settings;
+        const days = WEEK_DAYS.filter((d) => s.weeklySchedule[d.key]?.enabled);
+        const hasSchedule = days.length > 0;
+        return `<div class="memberCard card">
+          <div class="memberTop">
+            <div class="memberAvatar">${escapeHtml((m.name || "?").slice(0, 1).toUpperCase())}</div>
+            <div>
+              <strong>${escapeHtml(m.name)}</strong>
+              <small>${escapeHtml(m.email)}</small>
+            </div>
+            ${isAdminEmail(m.email) ? `<span class="badgeChip info">Admin</span>` : `<span class="badgeChip muted">Miembro</span>`}
+          </div>
+          <div class="memberMeta">
+            <span class="badgeChip ${s.active ? "ok" : "muted"}">${s.active ? "Activo" : "Inactivo"}</span>
+            <span class="badgeChip ${s.canWorkRemote ? "info" : "muted"}">${s.canWorkRemote ? "Remoto ✓" : "Solo sede"}</span>
+          </div>
+          ${hasSchedule
+            ? `<div class="memberDays">${days.map((d) => `<span class="dayPill">${d.short} ${escapeHtml(s.weeklySchedule[d.key].start)}</span>`).join("")}</div>`
+            : `<div class="emptyState small">Este miembro no tiene horario configurado.</div>`}
+          <button class="btnGhost btnSmall" type="button" data-config="${escapeHtml(m.email)}">Configurar horario</button>
+        </div>`;
+      }).join("")}
+    </section>
+  `);
+  $$("[data-config]", panel()).forEach((b) => b.addEventListener("click", () => { CONFIG_EMAIL = b.dataset.config; goTab("config"); }));
+}
+
+/* ==========================================================================
+   8. Auth + mount
+========================================================================== */
 function friendlyAuthError(code = "") {
   if (code === "auth/unauthorized-domain") return "Esta direccion de la app no esta habilitada para iniciar sesion.";
   if (code === "auth/popup-blocked") return "El navegador bloqueo la ventana de Google.";
@@ -1070,21 +2077,12 @@ async function doGoogleLogin(auth) {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
   try {
-    if (btn) {
-      btn.disabled = true;
-      btn.dataset.originalHtml = btn.innerHTML;
-      btn.textContent = "Abriendo Google...";
-    }
+    if (btn) { btn.disabled = true; btn.dataset.originalHtml = btn.innerHTML; btn.textContent = "Abriendo Google..."; }
     await setPersistence(auth, browserLocalPersistence);
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (popupError) {
+    try { await signInWithPopup(auth, provider); }
+    catch (popupError) {
       if (popupError?.code === "auth/popup-closed-by-user") return;
-      const shouldTryRedirect = [
-        "auth/popup-blocked",
-        "auth/cancelled-popup-request",
-        "auth/operation-not-supported-in-this-environment"
-      ].includes(popupError?.code);
+      const shouldTryRedirect = ["auth/popup-blocked", "auth/cancelled-popup-request", "auth/operation-not-supported-in-this-environment"].includes(popupError?.code);
       if (!shouldTryRedirect && !isStandalone()) throw popupError;
       toast("Te vamos a llevar a Google para iniciar sesion.", { ms: 2400 });
       await signInWithRedirect(auth, provider);
@@ -1096,25 +2094,19 @@ async function doGoogleLogin(auth) {
     console.error(error);
   } finally {
     loginLock = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = btn.dataset.originalHtml || `<span class="gIcon" aria-hidden="true">G</span> Entrar con Google`;
-    }
+    if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.originalHtml || `<span class="gIcon" aria-hidden="true">G</span> Entrar con Google`; }
   }
 }
 
 async function finalizeRedirectIfAny(auth) {
-  try {
-    await getRedirectResult(auth);
-  } catch (error) {
+  try { await getRedirectResult(auth); }
+  catch (error) {
     const friendly = friendlyAuthError(error?.code || "");
     toast(friendly ? `No se pudo completar el inicio de sesion: ${friendly}` : "No se pudo completar el inicio de sesion");
   }
 }
 
-function assertConfig(cfg) {
-  return Boolean(cfg?.apiKey && cfg?.authDomain && cfg?.projectId && cfg?.appId);
-}
+function assertConfig(cfg) { return Boolean(cfg?.apiKey && cfg?.authDomain && cfg?.projectId && cfg?.appId); }
 
 function setHubCopy() {
   document.title = HUB.name;
@@ -1125,56 +2117,42 @@ function setHubCopy() {
 
 async function mount() {
   setHubCopy();
-  if (!assertConfig(firebaseConfig)) {
-    show("login");
-    toast("No se pudo cargar la configuracion de la app. Intenta mas tarde.");
-    return;
-  }
+  if (!assertConfig(firebaseConfig)) { show("login"); toast("No se pudo cargar la configuracion de la app. Intenta mas tarde."); return; }
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
-  AUTH = auth;
-  DB = db;
+  AUTH = auth; DB = db;
   await setPersistence(auth, browserLocalPersistence).catch(() => null);
   await finalizeRedirectIfAny(auth);
 
   $("#btn-google")?.addEventListener("click", () => doGoogleLogin(auth));
   $("#btn-refresh-app")?.addEventListener("click", clearLocalAppCacheAndReload);
   $("#btn-logout")?.addEventListener("click", async () => {
-    try {
-      await signOut(auth);
-      show("login");
-      toast("Sesion cerrada");
-    } catch (_) {
-      toast("No se pudo cerrar sesion. Intenta de nuevo.");
-    }
+    try { await signOut(auth); show("login"); toast("Sesion cerrada"); }
+    catch (_) { toast("No se pudo cerrar sesion. Intenta de nuevo."); }
   });
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) {
-      ACTIVE_USER = null;
-      ACTIVE_EMAIL = "";
-      ACTIVE_PROFILE = null;
-      ACTIVE_LINKS = {};
-      await closeModal();
-      show("login");
-      return;
+      ACTIVE_USER = null; ACTIVE_EMAIL = ""; ACTIVE_PROFILE = null; ACTIVE_LINKS = {};
+      MEMBER_SETTINGS = {}; SCHEDULE_OVERRIDES = {}; DATA_LOADED = false;
+      await closeModal(); show("login"); return;
     }
     const email = emailKey(user);
     if (HUB.USERS && Object.keys(HUB.USERS).length && !HUB.USERS[email]) {
       toast("Tu correo no esta autorizado para este hub");
-      await signOut(auth).catch(() => null);
-      show("login");
-      return;
+      await signOut(auth).catch(() => null); show("login"); return;
     }
-    ACTIVE_USER = user;
-    ACTIVE_EMAIL = email;
+    ACTIVE_USER = user; ACTIVE_EMAIL = email;
     ACTIVE_PROFILE = HUB.USERS?.[email] || null;
     ACTIVE_LINKS = buildLinksForUser(email);
-    $("#user-line") && ($("#user-line").textContent = `${getProfileName()} · v${BUILD}`);
+    DATA_LOADED = false;
+    $("#user-line") && ($("#user-line").textContent = `${getProfileName()}${isCurrentUserAdmin() ? " · Admin" : ""} · v${BUILD}`);
     show("app");
-    renderHero();
-    renderButtons(HUB.BUTTONS, ACTIVE_LINKS);
+    await loadAdminData().catch(() => {});
+    CURRENT_TAB = "inicio";
+    renderNav();
+    goTab("inicio");
   });
 }
 

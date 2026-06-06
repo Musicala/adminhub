@@ -11,7 +11,7 @@
   <meta name="description" content="Hub de accesos para el equipo administrativo de Musicala (login con Google)." />
 
   <!-- PWA -->
-  <link rel="manifest" href="./manifest.webmanifest?v=2026-05-14.2" />
+  <link rel="manifest" href="./manifest.webmanifest?v=2026-06-05.1" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -26,7 +26,7 @@
   <!-- <link rel="apple-touch-startup-image" href="./icons/splash-2048x2732.png" /> -->
 
   <title>Musicala Admin Hub</title>
-  <link rel="stylesheet" href="./styles.css?v=2026-05-14.2" />
+  <link rel="stylesheet" href="./styles.css?v=2026-06-05.1" />
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 </head>
 
@@ -67,8 +67,8 @@
         <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
       </main>
 
-      <!-- ===== APP ===== -->
-      <main class="wrap" id="view-app" hidden>
+      <!-- ===== APP (panel) ===== -->
+      <main class="wrap appShell" id="view-app" hidden>
         <header class="top" role="banner">
           <div class="brand">
             <div class="logoWrap" aria-hidden="true">
@@ -86,11 +86,9 @@
               <button class="btnGhost" id="btn-install-2" type="button" title="Instalar" hidden>
                 Instalar
               </button>
-
               <button class="btnGhost" id="btn-refresh-app" type="button" title="Actualizar app">
                 Actualizar
               </button>
-
               <button class="btnGhost" id="btn-logout" type="button" title="Salir">
                 Salir
               </button>
@@ -98,12 +96,16 @@
           </div>
         </header>
 
-        <section class="grid" id="grid" aria-label="Accesos"></section>
+        <!-- Navegación interna tipo panel (tabs / barra inferior en móvil) -->
+        <nav class="panelNav" id="panel-nav" aria-label="Secciones"></nav>
+
+        <!-- Área de contenido dinámica -->
+        <section class="panelContent" id="panel-content" aria-live="polite"></section>
 
         <div class="toast" id="toast-app" role="status" aria-live="polite" aria-atomic="true" hidden></div>
       </main>
 
-      <script type="module" src="./app.js?v=2026-05-14.2"></script>
+      <script type="module" src="./app.js?v=2026-06-05.1"></script>
       <noscript>Esta app necesita JavaScript para funcionar.</noscript>
     </div>
   </div>
