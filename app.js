@@ -1164,7 +1164,7 @@ function renderRemoteShiftView() {
 function friendlySaveError(error) {
   if (error?.message === "cancelled") return "No se reemplazo el registro existente.";
   if (error?.message === "remote_not_allowed") return remoteNotAllowedMessage();
-  if (error?.code === "permission-denied") return "No se pudo guardar: este correo no tiene permiso de escritura en Firestore. Revisa que el correo autorizado sea exactamente el mismo con el que se inicio sesion.";
+  if (error?.code === "permission-denied") return `No se pudo guardar por permisos de Firestore. Sesion actual: ${ACTIVE_EMAIL || "sin correo"}. Si el problema sigue, avisa este correo al admin.`;
   if (error?.code === "unavailable" || error?.code === "deadline-exceeded") return "No se pudo guardar por conexion inestable. Intenta de nuevo cuando el celular tenga buena señal.";
   return "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.";
 }
