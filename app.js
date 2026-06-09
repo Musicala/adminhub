@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-09.2";
+const BUILD = "2026-06-09.3";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -1316,8 +1316,15 @@ async function saveShiftRecord(entry) {
   if ((entry.mode === "remoto" || entry.source === "manual_remote") && !canCurrentUserMarkRemote()) throw new Error("remote_not_allowed");
   const docId = `${safeEmailId(ACTIVE_EMAIL)}_${entry.date}`;
   const ref = doc(DB, COLLECTIONS.shiftRecords, docId);
-  const existingSnap = await getDoc(ref);
-  const existing = existingSnap.exists() ? existingSnap.data() : null;
+  let existingSnap = null;
+  let existing = null;
+  try {
+    existingSnap = await getDoc(ref);
+    existing = existingSnap.exists() ? existingSnap.data() : null;
+  } catch (error) {
+    if (error?.code !== "permission-denied") throw error;
+    console.warn("No se pudo leer el registro previo; se intentara guardar directamente.", error);
+  }
   const existingTime = existing?.[`${entry.type}Time`];
   const replacedExisting = Boolean(existingTime);
   if (existingTime) {
@@ -1341,8 +1348,8 @@ async function saveShiftRecord(entry) {
     appBuild: BUILD, clientCreatedAt, clientCreatedAtMs: Date.now()
   };
   const payload = { ...base, ...typed, events: arrayUnion(event) };
-  if (existingSnap.exists()) await updateDoc(ref, payload);
-  else await setDoc(ref, { ...payload, createdAt: serverTimestamp(), createdAtClient: Date.now() });
+  if (existingSnap?.exists()) await updateDoc(ref, payload);
+  else await setDoc(ref, { ...payload, createdAt: serverTimestamp(), createdAtClient: Date.now() }, { merge: true });
   await sendIngresoEmailNotification({ ...event, date: entry.date, docId, replacedExisting });
 }
 
