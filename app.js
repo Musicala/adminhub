@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-05.1";
+const BUILD = "2026-06-09.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -146,6 +146,7 @@ import {
   arrayUnion,
   getFirestore,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -309,6 +310,33 @@ function todayBogota() {
   return getBogotaParts().date;
 }
 
+function parseLocalDateInput(dateStr) {
+  const match = String(dateStr || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function formatLocalDateInput(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function dateRangeList(startStr, endStr) {
+  const start = parseLocalDateInput(startStr);
+  const end = parseLocalDateInput(endStr || startStr);
+  if (!start || !end || end < start) return [];
+  const dates = [];
+  const cursor = new Date(start);
+  while (cursor <= end && dates.length < 370) {
+    dates.push(formatLocalDateInput(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
 function weekdayKeyForDate(dateStr) {
   // dateStr: YYYY-MM-DD. Independiente de la zona del dispositivo.
   const idx = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
@@ -391,11 +419,14 @@ async function loadAdminData({ force = false } = {}) {
       const ms = await getDocs(collection(DB, COLLECTIONS.memberSettings));
       ms.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
       const ov = await getDocs(collection(DB, COLLECTIONS.scheduleOverrides));
-      ov.forEach((d) => { const data = d.data(); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = { id: d.id, ...data }; });
+      ov.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
     } else if (ACTIVE_EMAIL) {
       const sref = doc(DB, COLLECTIONS.memberSettings, safeEmailId(ACTIVE_EMAIL));
       const ssnap = await getDoc(sref);
       if (ssnap.exists()) MEMBER_SETTINGS[ACTIVE_EMAIL] = normalizeSettings(ssnap.data());
+      const oq = query(collection(DB, COLLECTIONS.scheduleOverrides), where("email", "==", ACTIVE_EMAIL));
+      const osnap = await getDocs(oq);
+      osnap.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
     }
   } catch (error) {
     console.warn("No se pudieron cargar configuraciones de horario", error);
@@ -405,6 +436,23 @@ async function loadAdminData({ force = false } = {}) {
     if (!MEMBER_SETTINGS[email]) MEMBER_SETTINGS[email] = defaultSettingsFor(email, { seeded: true });
   }
   DATA_LOADED = true;
+}
+
+function normalizeOverride(id, data) {
+  const enabled = data?.enabled === false ? false : true;
+  return {
+    id,
+    email: String(data?.email || "").toLowerCase().trim(),
+    date: data?.date || "",
+    enabled,
+    start: data?.start || DEFAULT_DAY.start,
+    end: data?.end || DEFAULT_DAY.end,
+    modality: data?.modality || "sede",
+    graceMinutes: Number.isFinite(data?.graceMinutes) ? data.graceMinutes : 5,
+    reason: data?.reason || "",
+    createdBy: data?.createdBy || "",
+    createdAtClient: data?.createdAtClient || null
+  };
 }
 
 function defaultSettingsFor(email, extra = {}) {
@@ -1005,7 +1053,8 @@ function openExternalLink(id) {
 /* ==========================================================================
    6b. Vista: Marcar jornada (QR + remoto) — conserva la logica original
 ========================================================================== */
-function renderShiftTab() {
+async function renderShiftTab() {
+  await loadAdminData().catch(() => {});
   const remoteAllowed = canCurrentUserMarkRemote();
   setPanel(`
     <section class="dashHead">
@@ -1857,12 +1906,12 @@ async function renderConfigTab() {
         <select id="cfg-member" class="input">
           ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
         </select></label>
-      <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepcion por fecha</button>
+      <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepcion / cambio de horario</button>
     </section>
     <div id="cfg-body"></div>
   `);
   $("#cfg-member").addEventListener("change", (e) => { CONFIG_EMAIL = e.target.value; renderMemberSettings(); });
-  $("#cfg-add-override").addEventListener("click", () => openOverrideModal(CONFIG_EMAIL));
+  $("#cfg-add-override").addEventListener("click", () => openOverrideModalV2(CONFIG_EMAIL));
   renderMemberSettings();
 }
 
@@ -1916,15 +1965,19 @@ function renderMemberSettings() {
 
     <section class="card cfgCard">
       <h3 class="sectionH">Excepciones de horario (${overrides.length})</h3>
-      <p class="modalNote">Las excepciones aplican solo a una fecha concreta y tienen prioridad sobre el horario semanal.</p>
+      <p class="modalNote">Las excepciones aplican a una o varias fechas concretas y tienen prioridad sobre el horario semanal.</p>
       ${overrides.length ? `<div class="tableWrap"><table class="dataTable">
-        <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Modalidad</th><th>Motivo</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Modalidad</th><th>Motivo</th><th>Acciones</th></tr></thead>
         <tbody>${overrides.map((o) => `<tr>
           <td data-label="Fecha">${escapeHtml(o.date)}</td>
           <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Dia libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
           <td data-label="Horario">${o.enabled === false ? "—" : `${escapeHtml(o.start || "")} – ${escapeHtml(o.end || "")}`}</td>
           <td data-label="Modalidad">${escapeHtml(o.modality || "—")}</td>
           <td data-label="Motivo">${escapeHtml(o.reason || "")}</td>
+          <td data-label="Acciones"><div class="tableActions">
+            <button class="btnGhost btnSmall" type="button" data-edit-override="${escapeHtml(o.id || `${safeEmailId(o.email)}_${o.date}`)}">Editar</button>
+            <button class="btnGhost btnSmall danger" type="button" data-delete-override="${escapeHtml(o.id || `${safeEmailId(o.email)}_${o.date}`)}">Eliminar</button>
+          </div></td>
         </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay excepciones para este miembro.</div>`}
     </section>
   `;
@@ -1933,6 +1986,11 @@ function renderMemberSettings() {
     e.target.closest(".dayCard").classList.toggle("on", e.target.checked);
     e.target.closest(".dayCard").classList.toggle("off", !e.target.checked);
   }));
+  $$("[data-edit-override]", host).forEach((btn) => btn.addEventListener("click", () => {
+    const override = Object.values(SCHEDULE_OVERRIDES).find((o) => o.id === btn.dataset.editOverride);
+    if (override) openOverrideModalV2(CONFIG_EMAIL, override);
+  }));
+  $$("[data-delete-override]", host).forEach((btn) => btn.addEventListener("click", () => deleteScheduleOverride(btn.dataset.deleteOverride)));
 }
 
 async function saveMemberSettings() {
@@ -1971,6 +2029,112 @@ async function saveMemberSettings() {
   } catch (error) {
     console.error(error);
     toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar la configuracion.", { kind: "warn" });
+  }
+}
+
+function openOverrideModalV2(email, existingOverride = null) {
+  const name = getProfileName(email);
+  const editing = Boolean(existingOverride?.date);
+  const initialDate = existingOverride?.date || todayBogota();
+  const initialEnabled = existingOverride?.enabled !== false;
+  const initialWeekday = weekdayKeyForDate(initialDate);
+  openModal(editing ? "Editar excepcion de horario" : "Nueva excepcion de horario", `${name}`, editing ? `Excepcion del ${initialDate}` : "Excepcion o cambio permanente", `
+    <p class="modalNote">Usa excepcion para fechas puntuales. Si el horario cambia de ahora en adelante, activa el cambio permanente para actualizar tambien el horario semanal.</p>
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Desde</span><input type="date" id="o-date-start" class="input" value="${escapeHtml(initialDate)}" ${editing ? "disabled" : ""}></label>
+      <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="o-date-end" class="input" value="${escapeHtml(initialDate)}" ${editing ? "disabled" : ""}></label>
+      <label class="field checkField"><input type="checkbox" id="o-enabled" ${initialEnabled ? "checked" : ""}> <span>Trabaja esos dias</span></label>
+      <label class="field"><span class="fieldLabel">Ingreso</span><input type="time" id="o-start" class="input" value="${escapeHtml(existingOverride?.start || "10:00")}"></label>
+      <label class="field"><span class="fieldLabel">Salida</span><input type="time" id="o-end" class="input" value="${escapeHtml(existingOverride?.end || "16:00")}"></label>
+      <label class="field"><span class="fieldLabel">Modalidad</span>
+        <select id="o-modality" class="input">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${(existingOverride?.modality || "sede") === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
+      <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : 5}"></label>
+    </div>
+    <div class="weekdayPick" aria-label="Dias de la excepcion">
+      ${WEEK_DAYS.map((d) => `<label class="dayCheck"><input type="checkbox" class="o-weekday" value="${d.key}" ${(editing ? d.key === initialWeekday : true) ? "checked" : ""} ${editing ? "disabled" : ""}><span>${escapeHtml(d.short)}</span></label>`).join("")}
+    </div>
+    <label class="field checkField permanentCheck"><input type="checkbox" id="o-permanent" ${editing ? "disabled" : ""}> <span>Este es el nuevo horario permanente desde ahora</span></label>
+    <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunion externa autorizada" value="${escapeHtml(existingOverride?.reason || "")}"></label>
+    <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">${editing ? "Guardar edicion" : "Guardar cambio"}</button></div>
+  `);
+  $("#o-cancel").addEventListener("click", closeModal);
+  const syncEnabledFields = () => {
+    const enabled = $("#o-enabled").checked;
+    ["#o-start", "#o-end", "#o-modality", "#o-grace"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.disabled = !enabled;
+    });
+    $("#o-permanent").disabled = !enabled;
+    if (!enabled) $("#o-permanent").checked = false;
+  };
+  $("#o-enabled").addEventListener("change", syncEnabledFields);
+  syncEnabledFields();
+  $("#o-save").addEventListener("click", async () => {
+    const startDate = editing ? initialDate : $("#o-date-start").value;
+    const endDate = editing ? initialDate : ($("#o-date-end").value || startDate);
+    const allowedDays = new Set($$(".o-weekday:checked").map((el) => el.value));
+    const dates = dateRangeList(startDate, endDate).filter((date) => allowedDays.has(weekdayKeyForDate(date)));
+    if (!startDate || !endDate) { toast("Indica fecha inicial y final.", { kind: "warn" }); return; }
+    if (!dates.length) { toast("No hay fechas seleccionadas para guardar.", { kind: "warn" }); return; }
+    const enabled = $("#o-enabled").checked;
+    const start = $("#o-start").value || DEFAULT_DAY.start;
+    const end = $("#o-end").value || DEFAULT_DAY.end;
+    const modality = $("#o-modality").value;
+    const graceMinutes = Number($("#o-grace").value) || 0;
+    const reason = $("#o-reason").value.trim();
+    const permanent = enabled && $("#o-permanent").checked;
+    const permanentDays = Array.from(new Set(dates.map(weekdayKeyForDate)));
+    if (!confirm(editing ? `Guardar cambios en la excepcion del ${initialDate}?` : `Guardar este cambio para ${dates.length} fecha${dates.length === 1 ? "" : "s"}${permanent ? " y actualizar el horario semanal" : ""}?`)) return;
+    try {
+      for (const date of dates) {
+        const payload = {
+          email, date, enabled, start, end, modality, graceMinutes, reason,
+          rangeStart: startDate, rangeEnd: endDate, weekdays: Array.from(allowedDays),
+          createdBy: ACTIVE_EMAIL, createdAt: serverTimestamp(), createdAtClient: Date.now()
+        };
+        const id = `${safeEmailId(email)}_${date}`;
+        await setDoc(doc(DB, COLLECTIONS.scheduleOverrides, id), payload, { merge: true });
+        SCHEDULE_OVERRIDES[`${email}__${date}`] = normalizeOverride(id, payload);
+      }
+      if (permanent) {
+        const current = MEMBER_SETTINGS[email] || defaultSettingsFor(email, { seeded: true });
+        const weeklySchedule = JSON.parse(JSON.stringify(current.weeklySchedule || defaultWeeklySchedule()));
+        permanentDays.forEach((dayKey) => {
+          weeklySchedule[dayKey] = { ...(weeklySchedule[dayKey] || DEFAULT_DAY), enabled: true, start, end, modality, graceMinutes, notes: reason };
+        });
+        const settingsPayload = {
+          ...current,
+          weeklySchedule,
+          updatedAt: serverTimestamp(),
+          updatedAtClient: Date.now(),
+          updatedBy: ACTIVE_EMAIL
+        };
+        await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(email)), { ...settingsPayload, createdAt: serverTimestamp() }, { merge: true });
+        MEMBER_SETTINGS[email] = normalizeSettings(settingsPayload);
+      }
+      toast(permanent ? "Horario permanente y excepciones guardados" : "Excepcion guardada", { kind: "ok" });
+      await closeModal();
+      renderMemberSettings();
+    } catch (error) {
+      console.error(error);
+      toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar el cambio.", { kind: "warn" });
+    }
+  });
+}
+
+async function deleteScheduleOverride(id) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  const override = Object.values(SCHEDULE_OVERRIDES).find((o) => o.id === id);
+  if (!override) { toast("No se encontro la excepcion.", { kind: "warn" }); return; }
+  if (!confirm(`Eliminar la excepcion del ${override.date}?`)) return;
+  try {
+    await deleteDoc(doc(DB, COLLECTIONS.scheduleOverrides, id));
+    delete SCHEDULE_OVERRIDES[`${override.email}__${override.date}`];
+    toast("Excepcion eliminada", { kind: "ok" });
+    renderMemberSettings();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para eliminar esta excepcion." : "No se pudo eliminar la excepcion.", { kind: "warn" });
   }
 }
 

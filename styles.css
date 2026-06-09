@@ -1702,6 +1702,11 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .dayFields{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
 .field.mini .fieldLabel{ font-size:10.5px; }
 .field.mini .input{ padding:7px 9px; font-size:13px; }
+.weekdayPick{ display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.dayCheck input{ position:absolute; opacity:0; pointer-events:none; }
+.dayCheck span{ display:grid; place-items:center; min-width:42px; height:36px; padding:0 10px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--muted); font-size:12px; font-weight:800; cursor:pointer; }
+.dayCheck input:checked + span{ border-color:rgba(91,43,214,.45); background:rgba(91,43,214,.1); color:var(--a2); }
+.permanentCheck{ margin-top:8px; }
 .switch{ position:relative; display:inline-block; width:42px; height:24px; }
 .switch input{ opacity:0; width:0; height:0; }
 .switch span{ position:absolute; inset:0; background:var(--muteBg); border-radius:999px; transition:.2s; cursor:pointer; }
@@ -1719,6 +1724,9 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .memberMeta{ display:flex; gap:6px; flex-wrap:wrap; }
 .memberDays{ display:flex; gap:5px; flex-wrap:wrap; }
 .dayPill{ font-size:11px; font-weight:600; padding:3px 8px; border-radius:8px; background:var(--muteBg); color:var(--muted); }
+.tableActions{ display:flex; gap:6px; flex-wrap:wrap; }
+.btnGhost.danger{ color:#b42318; border-color:rgba(180,35,24,.22); background:rgba(180,35,24,.06); }
+.btnGhost.danger:hover{ border-color:rgba(180,35,24,.38); background:rgba(180,35,24,.1); }
 
 /* ===== Estados vacios ===== */
 .emptyState{ padding:22px; text-align:center; color:var(--muted); font-size:13.5px; background:var(--muteBg); border-radius:var(--r); }
