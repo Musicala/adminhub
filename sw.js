@@ -4,7 +4,7 @@
    - Navegacion y archivos principales: network-first con cache no-store.
    - Assets secundarios: cache con actualizacion en segundo plano.
 */
-const BUILD = "2026-06-05.1";
+const BUILD = "2026-06-09.2";
 const VERSION = "admin-hub-" + BUILD;
 const CACHE_STATIC = `musicala-admin-static-${VERSION}`;
 const CACHE_RUNTIME = `musicala-admin-runtime-${VERSION}`;
@@ -103,7 +103,7 @@ self.addEventListener("fetch", (event) => {
   if (NETWORK_FIRST_PATHS.has(url.pathname)) {
     event.respondWith((async () => {
       try {
-        const fresh = await fetch(req, { cache: "no-store" });
+        const fresh = await fetch(req, { cache: "reload" });
         const cache = await caches.open(CACHE_RUNTIME);
         cache.put(req, fresh.clone());
         return fresh;

@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-09.1";
+const BUILD = "2026-06-09.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -729,6 +729,7 @@ async function registerServiceWorker() {
   try {
     const swUrl = `./sw.js?v=${encodeURIComponent(BUILD)}`;
     const reg = await navigator.serviceWorker.register(swUrl, { scope: "./", updateViaCache: "none" });
+    const requestUpdate = () => reg.update?.().catch(() => null);
     promptUpdate(reg);
     reg.addEventListener("updatefound", () => {
       const sw = reg.installing;
@@ -736,6 +737,11 @@ async function registerServiceWorker() {
         if (sw.state === "installed" && navigator.serviceWorker.controller) promptUpdate(reg);
       });
     });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") requestUpdate();
+    });
+    window.addEventListener("focus", requestUpdate);
+    setInterval(requestUpdate, 60 * 1000);
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "SW_ACTIVATED") console.log("SW_ACTIVATED", event.data.version);
     });
@@ -744,7 +750,7 @@ async function registerServiceWorker() {
       window.__reloadingForSW = true;
       window.location.reload();
     });
-    reg.update?.().catch(() => null);
+    requestUpdate();
   } catch (error) {
     console.warn("No se pudo preparar la app para uso sin conexion", error);
   }
