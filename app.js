@@ -1,4 +1,4 @@
-/* Musicala Admin Hub
+﻿/* Musicala Admin Hub
    - Login con Google (Firebase Auth)
    - Hub administrativo + panel de jornadas, puntualidad y estadisticas
    - Registro de jornada interno con lector QR + Firestore + marcacion remota
@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-09.3";
+const BUILD = "2026-06-16.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -78,6 +78,13 @@ const COLLECTIONS = {
   scheduleOverrides: "adminScheduleOverrides"
 };
 
+const LEGACY_ANNUAL_SCHEDULE_SOURCES = {
+  "licethrinconr@gmail.com": {
+    year: 2026,
+    url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vR1CFXBvdEojaE0WJOyIZyJgjFhbidzASj4qzfFkNpFe76lJxFVRUEh5JbSDWKN4TWK_9zC97WD6SjV/pub?gid=0&single=true&output=tsv"
+  }
+};
+
 const SHIFT = {
   timezone: "America/Bogota",
   role: "administrativo"
@@ -111,6 +118,10 @@ const WEEK_DAYS = [
 ];
 // getUTCDay(): 0=domingo .. 6=sabado
 const WEEKDAY_INDEX_TO_KEY = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const MONTH_NAMES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+];
 
 const DEFAULT_DAY = {
   enabled: false,
@@ -610,7 +621,7 @@ function finalizeStatus(out, record) {
 function calculateStats(records, range) {
   const { from, to, memberFilter = "all", modalityFilter = "all", statusFilter = "all" } = range;
   const days = datesInRange(from, to);
-  const members = adminMemberList().filter((m) => memberFilter === "all" || m.email === memberFilter);
+  const members = statsMemberList().filter((m) => memberFilter === "all" || m.email === memberFilter);
 
   // Index registros por email+fecha
   const byKey = {};
@@ -714,6 +725,10 @@ function adminMemberList() {
   }).filter((m) => m.active).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function statsMemberList() {
+  return adminMemberList().filter((m) => !isAdminEmail(m.email));
+}
+
 /* ==========================================================================
    4. PWA / Service worker / install
 ========================================================================== */
@@ -804,12 +819,13 @@ function setupInstallPrompt() {
    5. Navegacion tipo panel
 ========================================================================== */
 const TABS = [
-  { id: "inicio", label: "Inicio", icon: "🏠", admin: false },
-  { id: "jornada", label: "Marcar", icon: "⏱️", admin: false },
-  { id: "registros", label: "Registros", icon: "🗂️", admin: false },
-  { id: "stats", label: "Estadisticas", icon: "📊", admin: true },
-  { id: "config", label: "Configuracion", icon: "⚙️", admin: true },
-  { id: "equipo", label: "Equipo", icon: "👥", admin: true }
+  { id: "inicio", label: "Inicio", icon: "Inicio", admin: false },
+  { id: "jornada", label: "Marcar", icon: "Jornada", admin: false },
+  { id: "calendario", label: "Horario anual", icon: "Cal", admin: false },
+  { id: "registros", label: "Registros", icon: "Reg", admin: false },
+  { id: "stats", label: "Estadisticas", icon: "Stats", admin: true },
+  { id: "config", label: "Configuracion", icon: "Cfg", admin: true },
+  { id: "equipo", label: "Equipo", icon: "Eq", admin: true }
 ];
 
 function renderNav() {
@@ -842,6 +858,7 @@ async function goTab(tab) {
   switch (tab) {
     case "inicio": return renderDashboard();
     case "jornada": return renderShiftTab();
+    case "calendario": return renderAnnualCalendarTab();
     case "registros": return renderRecordsTab();
     case "stats": return renderAdminStats();
     case "config": return renderConfigTab();
@@ -1028,8 +1045,226 @@ function kpiCard(label, value, sub, tone = "") {
   </div>`;
 }
 
+/* ==========================================================================
+   6b. Vista: Horario anual
+========================================================================== */
+let CALENDAR_YEAR = Number(todayBogota().slice(0, 4)) || new Date().getFullYear();
+let CALENDAR_EMAIL = "";
+const LEGACY_ANNUAL_CACHE = {};
+
+function parseLegacyDmy(str) {
+  const parts = String(str || "").trim().split("/");
+  if (parts.length !== 3) return "";
+  const [d, m, y] = parts.map(Number);
+  if (!d || !m || !y) return "";
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function parseLegacyTime(str) {
+  const raw = String(str || "").trim().toLowerCase();
+  if (!raw || raw === "-") return "";
+  const match = raw.match(/^(\d{1,2})(?::(\d{1,2}))?\s*(am|pm)?$/);
+  if (!match) return "";
+  let h = Number(match[1]);
+  const m = Number(match[2] || 0);
+  const meridiem = match[3] || "";
+  if (meridiem === "pm" && h !== 12) h += 12;
+  if (meridiem === "am" && h === 12) h = 0;
+  if (h > 23 || m > 59) return "";
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function parseLegacyTsv(tsv) {
+  const rows = String(tsv || "").replace(/\r/g, "").split("\n").map((line) => line.split("\t").map((v) => (v || "").trim()));
+  const map = {};
+  for (const r of rows) {
+    const date = parseLegacyDmy(r[1]);
+    if (!date) continue;
+    const start = parseLegacyTime(r[2]);
+    const end = parseLegacyTime(r[3]);
+    const note = r[5] || r[4] || "";
+    if (start && end) map[date] = { source: "legacy", start, end, modality: "sede", graceMinutes: 5, notes: note };
+    else map[date] = { source: "legacy-free", label: note || "Sin jornada" };
+  }
+  return map;
+}
+
+async function loadLegacyAnnualSchedule(email, year) {
+  const source = LEGACY_ANNUAL_SCHEDULE_SOURCES[email];
+  if (!source || source.year !== year) return null;
+  const key = `${email}__${year}`;
+  if (LEGACY_ANNUAL_CACHE[key]) return LEGACY_ANNUAL_CACHE[key];
+  try {
+    const res = await fetch(`${source.url}&t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    LEGACY_ANNUAL_CACHE[key] = parseLegacyTsv(await res.text());
+    return LEGACY_ANNUAL_CACHE[key];
+  } catch (error) {
+    console.warn("No se pudo cargar horario anual legado", error);
+    LEGACY_ANNUAL_CACHE[key] = null;
+    return null;
+  }
+}
+
+function effectiveShiftMinutes(schedule) {
+  if (!schedule) return 0;
+  const start = toMinutes(schedule.start);
+  const end = toMinutes(schedule.end);
+  if (start == null || end == null || end <= start) return 0;
+  const raw = end - start;
+  return Math.max(0, raw - (raw > 360 ? 60 : 0));
+}
+
+function calendarMembers() {
+  if (!isCurrentUserAdmin()) {
+    const own = MEMBER_SETTINGS[ACTIVE_EMAIL] || defaultSettingsFor(ACTIVE_EMAIL, { seeded: true });
+    return [{ email: ACTIVE_EMAIL, name: own.name || getProfileName(ACTIVE_EMAIL), settings: own, active: true }];
+  }
+  return adminMemberList();
+}
+
+function annualCalendarStats(email, year) {
+  let workDays = 0;
+  let freeDays = 0;
+  let effectiveMinutes = 0;
+  let lunchDays = 0;
+  let overrideDays = 0;
+  for (let month = 0; month < 12; month++) {
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const dayData = getCalendarDayForDate(email, date);
+      const schedule = dayData.schedule;
+      if (!schedule) { freeDays++; continue; }
+      const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
+      workDays++;
+      effectiveMinutes += effectiveShiftMinutes(schedule);
+      if (schedule.source === "override") overrideDays++;
+      if (raw > 360) lunchDays++;
+    }
+  }
+  return { workDays, freeDays, effectiveMinutes, lunchDays, overrideDays };
+}
+
+function renderCalendarMonth(email, year, month) {
+  const first = new Date(year, month, 1);
+  const offset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const day = i - offset + 1;
+    if (day < 1 || day > daysInMonth) {
+      cells.push(`<div class="annualDay muted" aria-hidden="true"></div>`);
+      continue;
+    }
+    const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const dayData = getCalendarDayForDate(email, date);
+    const schedule = dayData.schedule;
+    if (!schedule) {
+      cells.push(`<button class="annualDay free" type="button" data-date="${date}"><strong>${day}</strong><span>${escapeHtml(dayData.label || "Sin jornada")}</span></button>`);
+      continue;
+    }
+    const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
+    cells.push(`<button class="annualDay work${schedule.source === "override" ? " override" : ""}" type="button" data-date="${date}">
+      <strong>${day}</strong>
+      <span>${escapeHtml(minutesToHhmm(effectiveShiftMinutes(schedule)))} · ${escapeHtml(schedule.start)} - ${escapeHtml(schedule.end)}</span>
+      <small>${escapeHtml(schedule.modality || "sede")}${raw > 360 ? " · almuerzo" : ""}</small>
+    </button>`);
+  }
+  return `<section class="annualMonth card">
+    <h3>${escapeHtml(MONTH_NAMES[month])}</h3>
+    <div class="annualWeekdays">${WEEK_DAYS.map((d) => `<span>${escapeHtml(d.short)}</span>`).join("")}</div>
+    <div class="annualGrid">${cells.join("")}</div>
+  </section>`;
+}
+
+function getCalendarDayForDate(email, date) {
+  const override = getScheduleOverride(email, date);
+  if (override) {
+    if (override.enabled === false) return { schedule: null, label: override.reason || "Sin jornada" };
+    return { schedule: getExpectedScheduleForDate(email, date), label: "" };
+  }
+  const legacy = LEGACY_ANNUAL_CACHE[`${email}__${date.slice(0, 4)}`]?.[date];
+  if (legacy) {
+    if (legacy.source === "legacy-free") return { schedule: null, label: legacy.label || "Sin jornada" };
+    return { schedule: legacy, label: "" };
+  }
+  return { schedule: getExpectedScheduleForDate(email, date), label: "" };
+}
+
+async function renderAnnualCalendarTab() {
+  setPanel(`<div class="loadingBlock">Cargando horario anual...</div>`);
+  await loadAdminData({ force: isCurrentUserAdmin() }).catch(() => {});
+  const members = calendarMembers();
+  CALENDAR_EMAIL = CALENDAR_EMAIL && members.some((m) => m.email === CALENDAR_EMAIL) ? CALENDAR_EMAIL : (isCurrentUserAdmin() ? (members.find((m) => !isAdminEmail(m.email))?.email || members[0]?.email || ACTIVE_EMAIL) : ACTIVE_EMAIL);
+  const activeMember = members.find((m) => m.email === CALENDAR_EMAIL) || members[0];
+  await loadLegacyAnnualSchedule(activeMember.email, CALENDAR_YEAR);
+  const stats = annualCalendarStats(activeMember.email, CALENDAR_YEAR);
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">Jornadas de trabajo</p>
+        <h2 class="dashTitle">Horario anual de ${escapeHtml(activeMember.name)}</h2>
+        <p class="dashSub">Todas las horas mostradas son efectivas. Si la jornada supera 6h, se descuenta 1h de almuerzo.</p>
+      </div>
+      <div class="headActions">
+        ${isCurrentUserAdmin() ? `<label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="cal-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === activeMember.email ? "selected" : ""}>${escapeHtml(m.name)}${isAdminEmail(m.email) ? " (admin)" : ""}</option>`).join("")}</select></label>` : ""}
+        <label class="field inlineField"><span class="fieldLabel">Anio</span><input type="number" id="cal-year" class="input" min="2024" max="2035" value="${CALENDAR_YEAR}"></label>
+      </div>
+    </section>
+
+    <section class="kpiGrid wide">
+      ${kpiCard("Horas efectivas", minutesToHhmm(stats.effectiveMinutes), "almuerzo ya descontado", "info")}
+      ${kpiCard("Dias con jornada", stats.workDays, "en el anio seleccionado", "ok")}
+      ${kpiCard("Dias sin jornada", stats.freeDays, "incluye descansos y festivos", "")}
+      ${kpiCard("Con almuerzo", stats.lunchDays, "jornadas mayores a 6h", "warn")}
+      ${kpiCard("Excepciones", stats.overrideDays, "cambios por fecha", stats.overrideDays ? "info" : "")}
+    </section>
+
+    <section class="annualLegend">
+      <span class="legendChip work">Con jornada</span>
+      <span class="legendChip free">Sin jornada</span>
+      <span class="legendChip override">Excepcion</span>
+    </section>
+
+    <section class="annualYearGrid">
+      ${Array.from({ length: 12 }, (_, month) => renderCalendarMonth(activeMember.email, CALENDAR_YEAR, month)).join("")}
+    </section>
+  `);
+  $("#cal-member")?.addEventListener("change", (e) => { CALENDAR_EMAIL = e.target.value; renderAnnualCalendarTab(); });
+  $("#cal-year")?.addEventListener("change", (e) => {
+    CALENDAR_YEAR = Math.max(2024, Math.min(2035, Number(e.target.value) || CALENDAR_YEAR));
+    renderAnnualCalendarTab();
+  });
+  $$(".annualDay[data-date]", panel()).forEach((btn) => btn.addEventListener("click", () => openCalendarDayDetail(activeMember.email, btn.dataset.date)));
+}
+
+function openCalendarDayDetail(email, date) {
+  const dayData = getCalendarDayForDate(email, date);
+  const schedule = dayData.schedule;
+  const name = getProfileName(email);
+  if (!schedule) {
+    openModal("Sin jornada", `${name} · ${date}`, "Horario anual", `<p class="modalNote">${escapeHtml(dayData.label || "Este dia no tiene jornada configurada para este trabajador.")}</p>`);
+    return;
+  }
+  const rawMinutes = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
+  openModal("Detalle de jornada", `${name} · ${date}`, "Horario anual", `
+    <div class="detailGrid">
+      ${detailItem("Ingreso", schedule.start)}
+      ${detailItem("Salida", schedule.end)}
+      ${detailItem("Horas efectivas", minutesToHhmm(effectiveShiftMinutes(schedule)))}
+      ${detailItem("Modalidad", schedule.modality || "sede")}
+      ${detailItem("Fuente", schedule.source === "override" ? "Excepcion por fecha" : "Horario semanal")}
+      ${detailItem("Almuerzo", rawMinutes > 360 ? "Descuenta 1h" : "No descuenta")}
+    </div>
+    ${(schedule.reason || schedule.notes) ? `<p class="noteBox">${escapeHtml(schedule.reason || schedule.notes)}</p>` : ""}
+    ${isCurrentUserAdmin() ? `<div class="modalActions"><button class="btnPrimary" type="button" id="btn-edit-day-schedule">Editar este dia</button></div>` : ""}
+  `);
+  $("#btn-edit-day-schedule")?.addEventListener("click", () => openOverrideModalV2(email, getScheduleOverride(email, date) || { date, ...schedule, enabled: true }));
+}
+
 function renderQuickLinksSection() {
-  const items = HUB.QUICK_LINKS.filter((q) => String(ACTIVE_LINKS[q.id] || "").trim());
+  const items = HUB.QUICK_LINKS.filter((q) => q.id === "horario" || String(ACTIVE_LINKS[q.id] || "").trim());
   if (!items.length) return "";
   return `
     <section class="dashSection">
@@ -1050,6 +1285,7 @@ function wireGoButtons() {
 }
 
 function openExternalLink(id) {
+  if (id === "horario") { goTab("calendario"); return; }
   const url = String(ACTIVE_LINKS[id] || "").trim();
   if (!url) { toast("Este acceso aun no tiene link configurado."); return; }
   const safeUrl = /^(https?:)?\/\//i.test(url) ? url : `https://${url}`;
@@ -1754,8 +1990,10 @@ async function renderAdminStats() {
 let STATS_RECORDS = [];
 
 function renderStatsUI() {
+  if (STATS_FILTER.member !== "all" && isAdminEmail(STATS_FILTER.member)) STATS_FILTER.member = "all";
   const r = presetRange(STATS_FILTER.preset);
   STATS_FILTER.from = r.from; STATS_FILTER.to = r.to;
+  const statMembers = statsMemberList();
   const stats = calculateStats(STATS_RECORDS, { from: r.from, to: r.to, memberFilter: STATS_FILTER.member, modalityFilter: STATS_FILTER.modality, statusFilter: STATS_FILTER.status });
   const g = stats.global;
   const bestMembers = stats.memberRows.filter((m) => m.onTime + m.late > 0).sort((a, b) => b.punctualityPct - a.punctualityPct);
@@ -1783,7 +2021,7 @@ function renderStatsUI() {
       <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="s-to" class="input" value="${escapeHtml(r.to)}" ${STATS_FILTER.preset !== "custom" ? "disabled" : ""}></label>
       <label class="field"><span class="fieldLabel">Miembro</span>
         <select id="s-member" class="input"><option value="all">Todos</option>
-          ${adminMemberList().map((m) => `<option value="${escapeHtml(m.email)}" ${STATS_FILTER.member === m.email ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
+          ${statMembers.map((m) => `<option value="${escapeHtml(m.email)}" ${STATS_FILTER.member === m.email ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
         </select></label>
       <label class="field"><span class="fieldLabel">Modalidad</span>
         <select id="s-modality" class="input">

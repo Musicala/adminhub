@@ -1732,6 +1732,124 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .emptyState{ padding:22px; text-align:center; color:var(--muted); font-size:13.5px; background:var(--muteBg); border-radius:var(--r); }
 .emptyState.small{ padding:12px; font-size:12.5px; }
 
+/* ===== Horario anual ===== */
+.inlineField{
+  min-width: 150px;
+}
+.annualLegend{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin:16px 0 12px;
+}
+.legendChip{
+  display:inline-flex;
+  align-items:center;
+  min-height:30px;
+  padding:5px 10px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:#fff;
+  color:var(--muted);
+  font-size:12px;
+  font-weight:800;
+}
+.legendChip.work{ color:var(--a1); background:rgba(12,65,196,.08); border-color:rgba(12,65,196,.18); }
+.legendChip.free{ color:var(--muted); background:var(--muteBg); }
+.legendChip.override{ color:var(--a3); background:rgba(206,0,113,.08); border-color:rgba(206,0,113,.18); }
+.annualYearGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+}
+.annualMonth{
+  padding:14px;
+  overflow:hidden;
+}
+.annualMonth h3{
+  margin:0 0 10px;
+  font-size:16px;
+  color:var(--text);
+}
+.annualWeekdays,
+.annualGrid{
+  display:grid;
+  grid-template-columns:repeat(7,minmax(0,1fr));
+  gap:6px;
+}
+.annualWeekdays{
+  margin-bottom:6px;
+}
+.annualWeekdays span{
+  text-align:center;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:900;
+}
+.annualDay{
+  min-height:76px;
+  padding:8px;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.72);
+  color:var(--text);
+  text-align:left;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  gap:4px;
+  cursor:pointer;
+  overflow:hidden;
+}
+.annualDay strong{
+  font-size:13px;
+  line-height:1;
+}
+.annualDay span{
+  color:var(--a1);
+  font-size:11.5px;
+  line-height:1.2;
+  font-weight:850;
+}
+.annualDay small{
+  color:var(--muted);
+  font-size:10.5px;
+  line-height:1.15;
+}
+.annualDay.work{
+  border-color:rgba(12,65,196,.22);
+  background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(12,65,196,.07));
+}
+.annualDay.override{
+  border-color:rgba(206,0,113,.28);
+  background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(206,0,113,.08));
+}
+.annualDay.free{
+  background:#fff;
+}
+.annualDay.free span{
+  color:var(--a2);
+}
+.annualDay.muted{
+  cursor:default;
+  background:rgba(11,16,32,.03);
+}
+@media (max-width:900px){
+  .annualYearGrid{ grid-template-columns:1fr; }
+}
+@media (max-width:620px){
+  .annualMonth{ padding:10px; }
+  .annualWeekdays,
+  .annualGrid{ gap:4px; }
+  .annualDay{
+    min-height:64px;
+    padding:6px;
+    border-radius:10px;
+  }
+  .annualDay span{ font-size:10px; }
+  .annualDay small{ display:none; }
+}
+
 /* ===== Toast con tono ===== */
 .toast[data-kind="ok"]{ border-left:4px solid var(--ok); }
 .toast[data-kind="warn"]{ border-left:4px solid var(--warn); }
