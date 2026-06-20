@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-20.1";
+const BUILD = "2026-06-20.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -2509,11 +2509,11 @@ async function renderTeamTab() {
         return `<div class="memberCard card">
           <div class="memberTop">
             <div class="memberAvatar">${escapeHtml((m.name || "?").slice(0, 1).toUpperCase())}</div>
-            <div>
+            <div class="memberId">
               <strong>${escapeHtml(m.name)}</strong>
               <small>${escapeHtml(m.email)}</small>
             </div>
-            ${isAdminEmail(m.email) ? `<span class="badgeChip info">Admin</span>` : `<span class="badgeChip muted">Miembro</span>`}
+            ${isAdminEmail(m.email) ? `<span class="badgeChip info memberRole">Admin</span>` : `<span class="badgeChip muted memberRole">Miembro</span>`}
           </div>
           <div class="memberMeta">
             <span class="badgeChip ${s.active ? "ok" : "muted"}">${s.active ? "Activo" : "Inactivo"}</span>
