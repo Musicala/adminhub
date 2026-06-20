@@ -386,6 +386,15 @@ function minutesToHhmm(min) {
   return `${sign}${h}h ${String(m).padStart(2, "0")}m`;
 }
 
+function hhmmTo12h(hhmm) {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return hhmm || "";
+  let [h, m] = hhmm.split(":").map(Number);
+  const ampm = h >= 12 ? "pm" : "am";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
 function addDaysStr(dateStr, days) {
   const d = new Date(`${dateStr}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -1049,6 +1058,7 @@ function kpiCard(label, value, sub, tone = "") {
    6b. Vista: Horario anual
 ========================================================================== */
 let CALENDAR_YEAR = Number(todayBogota().slice(0, 4)) || new Date().getFullYear();
+let CALENDAR_MONTH = (Number(todayBogota().slice(5, 7)) - 1) || new Date().getMonth();
 let CALENDAR_EMAIL = "";
 const LEGACY_ANNUAL_CACHE = {};
 
@@ -1167,7 +1177,7 @@ function renderCalendarMonth(email, year, month) {
     const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
     cells.push(`<button class="annualDay work${schedule.source === "override" ? " override" : ""}" type="button" data-date="${date}">
       <strong>${day}</strong>
-      <span>${escapeHtml(minutesToHhmm(effectiveShiftMinutes(schedule)))} · ${escapeHtml(schedule.start)} - ${escapeHtml(schedule.end)}</span>
+      <span>${escapeHtml(hhmmTo12h(schedule.start))} - ${escapeHtml(hhmmTo12h(schedule.end))}</span>
       <small>${escapeHtml(schedule.modality || "sede")}${raw > 360 ? " · almuerzo" : ""}</small>
     </button>`);
   }
@@ -1227,10 +1237,26 @@ async function renderAnnualCalendarTab() {
       <span class="legendChip override">Excepcion</span>
     </section>
 
-    <section class="annualYearGrid">
-      ${Array.from({ length: 12 }, (_, month) => renderCalendarMonth(activeMember.email, CALENDAR_YEAR, month)).join("")}
+    <section class="monthNav">
+      <button class="monthNavBtn" id="cal-prev" type="button" aria-label="Mes anterior">&#8249;</button>
+      <span class="monthNavLabel">${escapeHtml(MONTH_NAMES[CALENDAR_MONTH])} ${CALENDAR_YEAR}</span>
+      <button class="monthNavBtn" id="cal-next" type="button" aria-label="Mes siguiente">&#8250;</button>
+    </section>
+
+    <section class="annualYearGrid single">
+      ${renderCalendarMonth(activeMember.email, CALENDAR_YEAR, CALENDAR_MONTH)}
     </section>
   `);
+  $("#cal-prev")?.addEventListener("click", () => {
+    CALENDAR_MONTH -= 1;
+    if (CALENDAR_MONTH < 0) { CALENDAR_MONTH = 11; CALENDAR_YEAR = Math.max(2024, CALENDAR_YEAR - 1); }
+    renderAnnualCalendarTab();
+  });
+  $("#cal-next")?.addEventListener("click", () => {
+    CALENDAR_MONTH += 1;
+    if (CALENDAR_MONTH > 11) { CALENDAR_MONTH = 0; CALENDAR_YEAR = Math.min(2035, CALENDAR_YEAR + 1); }
+    renderAnnualCalendarTab();
+  });
   $("#cal-member")?.addEventListener("change", (e) => { CALENDAR_EMAIL = e.target.value; renderAnnualCalendarTab(); });
   $("#cal-year")?.addEventListener("change", (e) => {
     CALENDAR_YEAR = Math.max(2024, Math.min(2035, Number(e.target.value) || CALENDAR_YEAR));

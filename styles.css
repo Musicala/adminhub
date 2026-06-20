@@ -1762,6 +1762,49 @@ textarea.input{ resize:vertical; font-family:inherit; }
   grid-template-columns:repeat(2,minmax(0,1fr));
   gap:14px;
 }
+.annualYearGrid.single{
+  grid-template-columns:1fr;
+}
+.annualYearGrid.single .annualMonth h3{
+  display:none;
+}
+.annualYearGrid.single .annualDay{
+  min-height:118px;
+}
+.monthNav{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:18px;
+  margin:6px 0 14px;
+}
+.monthNavLabel{
+  font-size:18px;
+  font-weight:900;
+  color:var(--text);
+  min-width:180px;
+  text-align:center;
+  text-transform:capitalize;
+}
+.monthNavBtn{
+  width:40px;
+  height:40px;
+  border-radius:50%;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.8);
+  color:var(--a1);
+  font-size:22px;
+  line-height:1;
+  font-weight:900;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.monthNavBtn:hover{
+  background:var(--a1);
+  color:#fff;
+}
 .annualMonth{
   padding:14px;
   overflow:hidden;
