@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-16.1";
+const BUILD = "2026-06-20.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -828,13 +828,13 @@ function setupInstallPrompt() {
    5. Navegacion tipo panel
 ========================================================================== */
 const TABS = [
-  { id: "inicio", label: "Inicio", icon: "Inicio", admin: false },
-  { id: "jornada", label: "Marcar", icon: "Jornada", admin: false },
-  { id: "calendario", label: "Horario anual", icon: "Cal", admin: false },
-  { id: "registros", label: "Registros", icon: "Reg", admin: false },
-  { id: "stats", label: "Estadisticas", icon: "Stats", admin: true },
-  { id: "config", label: "Configuracion", icon: "Cfg", admin: true },
-  { id: "equipo", label: "Equipo", icon: "Eq", admin: true }
+  { id: "inicio", label: "Inicio", admin: false },
+  { id: "jornada", label: "Marcar", admin: false },
+  { id: "calendario", label: "Horario anual", admin: false },
+  { id: "registros", label: "Registros", admin: false },
+  { id: "stats", label: "Estadísticas", admin: true },
+  { id: "config", label: "Configuración", admin: true },
+  { id: "equipo", label: "Equipo", admin: true }
 ];
 
 function renderNav() {
@@ -843,7 +843,6 @@ function renderNav() {
   const admin = isCurrentUserAdmin();
   nav.innerHTML = TABS.filter((t) => !t.admin || admin).map((t) => `
     <button class="navItem${t.id === CURRENT_TAB ? " active" : ""}" type="button" data-tab="${t.id}">
-      <span class="navIco" aria-hidden="true">${t.icon}</span>
       <span class="navLbl">${escapeHtml(t.label)}</span>
     </button>
   `).join("");
@@ -2030,7 +2029,7 @@ function renderStatsUI() {
     <section class="dashHead">
       <div>
         <p class="dashEyebrow">Panel admin</p>
-        <h2 class="dashTitle">Estadisticas de puntualidad</h2>
+        <h2 class="dashTitle">Estadísticas de puntualidad</h2>
         <p class="dashSub">${escapeHtml(formatLongDate(r.from))} → ${escapeHtml(formatLongDate(r.to))}</p>
       </div>
       <div class="headActions">
@@ -2174,7 +2173,7 @@ async function renderConfigTab() {
     <section class="dashHead">
       <div>
         <p class="dashEyebrow">Panel admin</p>
-        <h2 class="dashTitle">Configuracion de horarios</h2>
+        <h2 class="dashTitle">Configuración de horarios</h2>
         <p class="dashSub">Define el horario semanal de cada miembro y las excepciones por fecha.</p>
       </div>
     </section>
