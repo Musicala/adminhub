@@ -1654,6 +1654,9 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .segMenu{ display:inline-flex; background:var(--muteBg); border-radius:12px; padding:3px; gap:2px; }
 .segBtn{ border:none; background:none; padding:7px 14px; border-radius:10px; font-weight:600; font-size:13px; color:var(--muted); cursor:pointer; }
 .segBtn.active{ background:#fff; color:var(--a1); box-shadow:var(--shadow2); }
+.ovFilter{ display:inline-flex; flex-wrap:wrap; gap:4px; background:var(--muteBg); border-radius:12px; padding:4px; margin:6px 0 14px; }
+.dataTable tr.rowToday{ background:linear-gradient(90deg,rgba(12,65,196,.12),rgba(12,65,196,.04)); box-shadow:inset 3px 0 0 var(--a1); }
+.dataTable tr.rowWeek{ background:rgba(12,65,196,.05); box-shadow:inset 3px 0 0 rgba(12,65,196,.3); }
 
 /* ===== Ranking + barras ===== */
 .rankList{ display:flex; flex-direction:column; gap:12px; }

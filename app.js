@@ -2193,12 +2193,35 @@ async function renderConfigTab() {
 }
 
 let CONFIG_EMAIL = "";
+let OVERRIDES_FILTER = "upcoming";
 
 function renderMemberSettings() {
   const host = $("#cfg-body");
   if (!host) return;
   const s = MEMBER_SETTINGS[CONFIG_EMAIL] || defaultSettingsFor(CONFIG_EMAIL, { seeded: true });
-  const overrides = Object.values(SCHEDULE_OVERRIDES).filter((o) => o.email === CONFIG_EMAIL).sort((a, b) => b.date.localeCompare(a.date));
+  const allOverrides = Object.values(SCHEDULE_OVERRIDES).filter((o) => o.email === CONFIG_EMAIL);
+  const today = todayBogota();
+  const dow = ((parseLocalDateInput(today)?.getDay() ?? 1) + 6) % 7; // 0 = lunes
+  const weekStart = addDaysStr(today, -dow);
+  const weekEnd = addDaysStr(today, 6 - dow);
+  const counts = {
+    week: allOverrides.filter((o) => o.date >= weekStart && o.date <= weekEnd).length,
+    upcoming: allOverrides.filter((o) => o.date >= today).length,
+    past: allOverrides.filter((o) => o.date < today).length,
+    all: allOverrides.length,
+  };
+  let overrides;
+  if (OVERRIDES_FILTER === "week") {
+    overrides = allOverrides.filter((o) => o.date >= weekStart && o.date <= weekEnd).sort((a, b) => a.date.localeCompare(b.date));
+  } else if (OVERRIDES_FILTER === "past") {
+    overrides = allOverrides.filter((o) => o.date < today).sort((a, b) => b.date.localeCompare(a.date));
+  } else if (OVERRIDES_FILTER === "all") {
+    const future = allOverrides.filter((o) => o.date >= today).sort((a, b) => a.date.localeCompare(b.date));
+    const past = allOverrides.filter((o) => o.date < today).sort((a, b) => b.date.localeCompare(a.date));
+    overrides = [...future, ...past];
+  } else {
+    overrides = allOverrides.filter((o) => o.date >= today).sort((a, b) => a.date.localeCompare(b.date));
+  }
   host.innerHTML = `
     <section class="card cfgCard">
       <div class="cfgHead">
@@ -2241,12 +2264,16 @@ function renderMemberSettings() {
     </section>
 
     <section class="card cfgCard">
-      <h3 class="sectionH">Excepciones de horario (${overrides.length})</h3>
+      <h3 class="sectionH">Excepciones de horario (${counts.all})</h3>
       <p class="modalNote">Las excepciones aplican a una o varias fechas concretas y tienen prioridad sobre el horario semanal.</p>
+      <div class="segGroup ovFilter">
+        ${[["week", "Esta semana", counts.week], ["upcoming", "Próximas", counts.upcoming], ["past", "Pasadas", counts.past], ["all", "Todas", counts.all]]
+          .map(([v, l, c]) => `<button class="segBtn${OVERRIDES_FILTER === v ? " active" : ""}" type="button" data-ov-filter="${v}">${l} (${c})</button>`).join("")}
+      </div>
       ${overrides.length ? `<div class="tableWrap"><table class="dataTable">
         <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Modalidad</th><th>Motivo</th><th>Acciones</th></tr></thead>
-        <tbody>${overrides.map((o) => `<tr>
-          <td data-label="Fecha">${escapeHtml(o.date)}</td>
+        <tbody>${overrides.map((o) => `<tr class="${o.date === today ? "rowToday" : (o.date >= weekStart && o.date <= weekEnd ? "rowWeek" : "")}">
+          <td data-label="Fecha">${escapeHtml(o.date)}${o.date === today ? ` <span class="badgeChip info">Hoy</span>` : ""}</td>
           <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Dia libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
           <td data-label="Horario">${o.enabled === false ? "—" : `${escapeHtml(o.start || "")} – ${escapeHtml(o.end || "")}`}</td>
           <td data-label="Modalidad">${escapeHtml(o.modality || "—")}</td>
@@ -2255,10 +2282,14 @@ function renderMemberSettings() {
             <button class="btnGhost btnSmall" type="button" data-edit-override="${escapeHtml(o.id || `${safeEmailId(o.email)}_${o.date}`)}">Editar</button>
             <button class="btnGhost btnSmall danger" type="button" data-delete-override="${escapeHtml(o.id || `${safeEmailId(o.email)}_${o.date}`)}">Eliminar</button>
           </div></td>
-        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay excepciones para este miembro.</div>`}
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">${counts.all ? "No hay excepciones en este filtro." : "No hay excepciones para este miembro."}</div>`}
     </section>
   `;
   $("#btn-save-settings").addEventListener("click", saveMemberSettings);
+  $$("[data-ov-filter]", host).forEach((btn) => btn.addEventListener("click", () => {
+    OVERRIDES_FILTER = btn.dataset.ovFilter;
+    renderMemberSettings();
+  }));
   $$(".day-enabled", host).forEach((chk) => chk.addEventListener("change", (e) => {
     e.target.closest(".dayCard").classList.toggle("on", e.target.checked);
     e.target.closest(".dayCard").classList.toggle("off", !e.target.checked);
