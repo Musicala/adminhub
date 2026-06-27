@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-20.2";
+const BUILD = "2026-06-27.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -2347,9 +2347,28 @@ function openOverrideModalV2(email, existingOverride = null) {
   const initialWeekday = weekdayKeyForDate(initialDate);
   openModal(editing ? "Editar excepcion de horario" : "Nueva excepcion de horario", `${name}`, editing ? `Excepcion del ${initialDate}` : "Excepcion o cambio permanente", `
     <p class="modalNote">Usa excepcion para fechas puntuales. Si el horario cambia de ahora en adelante, activa el cambio permanente para actualizar tambien el horario semanal.</p>
+    ${editing ? "" : `<div class="modeToggle" role="tablist" aria-label="Modo de seleccion de fechas">
+      <label class="modeOption"><input type="radio" name="o-mode" value="range" checked> <span>Por rango de fechas</span></label>
+      <label class="modeOption"><input type="radio" name="o-mode" value="specific"> <span>Fechas especificas</span></label>
+    </div>`}
+    <div id="o-range-wrap">
     <div class="formGrid">
       <label class="field"><span class="fieldLabel">Desde</span><input type="date" id="o-date-start" class="input" value="${escapeHtml(initialDate)}" ${editing ? "disabled" : ""}></label>
       <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="o-date-end" class="input" value="${escapeHtml(initialDate)}" ${editing ? "disabled" : ""}></label>
+    </div>
+    <div class="weekdayPick" aria-label="Dias de la excepcion">
+      ${WEEK_DAYS.map((d) => `<label class="dayCheck"><input type="checkbox" class="o-weekday" value="${d.key}" ${(editing ? d.key === initialWeekday : true) ? "checked" : ""} ${editing ? "disabled" : ""}><span>${escapeHtml(d.short)}</span></label>`).join("")}
+    </div>
+    </div>
+    ${editing ? "" : `<div id="o-specific-wrap" hidden>
+      <div class="specificAdd">
+        <input type="date" id="o-specific-date" class="input" value="${escapeHtml(initialDate)}">
+        <button class="btnGhost btnSmall" type="button" id="o-specific-add">+ Agregar fecha</button>
+      </div>
+      <p class="modalNote">Agrega los dias sueltos que quieras (ej: este martes, o 3 martes del mes).</p>
+      <div class="specificList" id="o-specific-list"></div>
+    </div>`}
+    <div class="formGrid">
       <label class="field checkField"><input type="checkbox" id="o-enabled" ${initialEnabled ? "checked" : ""}> <span>Trabaja esos dias</span></label>
       <label class="field"><span class="fieldLabel">Ingreso</span><input type="time" id="o-start" class="input" value="${escapeHtml(existingOverride?.start || "10:00")}"></label>
       <label class="field"><span class="fieldLabel">Salida</span><input type="time" id="o-end" class="input" value="${escapeHtml(existingOverride?.end || "16:00")}"></label>
@@ -2357,14 +2376,43 @@ function openOverrideModalV2(email, existingOverride = null) {
         <select id="o-modality" class="input">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${(existingOverride?.modality || "sede") === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
       <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : 5}"></label>
     </div>
-    <div class="weekdayPick" aria-label="Dias de la excepcion">
-      ${WEEK_DAYS.map((d) => `<label class="dayCheck"><input type="checkbox" class="o-weekday" value="${d.key}" ${(editing ? d.key === initialWeekday : true) ? "checked" : ""} ${editing ? "disabled" : ""}><span>${escapeHtml(d.short)}</span></label>`).join("")}
-    </div>
     <label class="field checkField permanentCheck"><input type="checkbox" id="o-permanent" ${editing ? "disabled" : ""}> <span>Este es el nuevo horario permanente desde ahora</span></label>
     <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunion externa autorizada" value="${escapeHtml(existingOverride?.reason || "")}"></label>
     <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">${editing ? "Guardar edicion" : "Guardar cambio"}</button></div>
   `);
   $("#o-cancel").addEventListener("click", closeModal);
+
+  // Modo de seleccion: rango (por defecto) o fechas especificas
+  const specificDates = new Set();
+  const getMode = () => (document.querySelector('input[name="o-mode"]:checked')?.value || "range");
+  const renderSpecificList = () => {
+    const list = $("#o-specific-list");
+    if (!list) return;
+    const arr = Array.from(specificDates).sort();
+    list.innerHTML = arr.length
+      ? arr.map((d) => `<span class="dateChip" data-date="${d}">${escapeHtml(formatLongDate(d) || d)} <button type="button" class="dateChipX" data-date="${d}" aria-label="Quitar">×</button></span>`).join("")
+      : `<span class="modalNote">Aun no agregaste fechas.</span>`;
+    $$(".dateChipX", list).forEach((btn) => btn.addEventListener("click", () => { specificDates.delete(btn.dataset.date); renderSpecificList(); }));
+  };
+  const syncMode = () => {
+    const specific = getMode() === "specific";
+    const rangeWrap = $("#o-range-wrap");
+    const specWrap = $("#o-specific-wrap");
+    if (rangeWrap) rangeWrap.hidden = specific;
+    if (specWrap) specWrap.hidden = !specific;
+  };
+  $$('input[name="o-mode"]').forEach((r) => r.addEventListener("change", syncMode));
+  if ($("#o-specific-add")) {
+    $("#o-specific-add").addEventListener("click", () => {
+      const v = $("#o-specific-date").value;
+      if (!v) { toast("Elige una fecha para agregar.", { kind: "warn" }); return; }
+      specificDates.add(v);
+      renderSpecificList();
+    });
+    renderSpecificList();
+  }
+  syncMode();
+
   const syncEnabledFields = () => {
     const enabled = $("#o-enabled").checked;
     ["#o-start", "#o-end", "#o-modality", "#o-grace"].forEach((sel) => {
@@ -2377,12 +2425,22 @@ function openOverrideModalV2(email, existingOverride = null) {
   $("#o-enabled").addEventListener("change", syncEnabledFields);
   syncEnabledFields();
   $("#o-save").addEventListener("click", async () => {
-    const startDate = editing ? initialDate : $("#o-date-start").value;
-    const endDate = editing ? initialDate : ($("#o-date-end").value || startDate);
-    const allowedDays = new Set($$(".o-weekday:checked").map((el) => el.value));
-    const dates = dateRangeList(startDate, endDate).filter((date) => allowedDays.has(weekdayKeyForDate(date)));
-    if (!startDate || !endDate) { toast("Indica fecha inicial y final.", { kind: "warn" }); return; }
-    if (!dates.length) { toast("No hay fechas seleccionadas para guardar.", { kind: "warn" }); return; }
+    const mode = editing ? "range" : getMode();
+    let startDate, endDate, dates, allowedDays;
+    if (mode === "specific") {
+      dates = Array.from(specificDates).sort();
+      if (!dates.length) { toast("Agrega al menos una fecha.", { kind: "warn" }); return; }
+      startDate = dates[0];
+      endDate = dates[dates.length - 1];
+      allowedDays = new Set(dates.map(weekdayKeyForDate));
+    } else {
+      startDate = editing ? initialDate : $("#o-date-start").value;
+      endDate = editing ? initialDate : ($("#o-date-end").value || startDate);
+      allowedDays = new Set($$(".o-weekday:checked").map((el) => el.value));
+      dates = dateRangeList(startDate, endDate).filter((date) => allowedDays.has(weekdayKeyForDate(date)));
+      if (!startDate || !endDate) { toast("Indica fecha inicial y final.", { kind: "warn" }); return; }
+      if (!dates.length) { toast("No hay fechas seleccionadas para guardar.", { kind: "warn" }); return; }
+    }
     const enabled = $("#o-enabled").checked;
     const start = $("#o-start").value || DEFAULT_DAY.start;
     const end = $("#o-end").value || DEFAULT_DAY.end;

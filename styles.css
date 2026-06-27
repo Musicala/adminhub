@@ -1710,6 +1710,15 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .dayCheck span{ display:grid; place-items:center; min-width:42px; height:36px; padding:0 10px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--muted); font-size:12px; font-weight:800; cursor:pointer; }
 .dayCheck input:checked + span{ border-color:rgba(91,43,214,.45); background:rgba(91,43,214,.1); color:var(--a2); }
 .permanentCheck{ margin-top:8px; }
+.modeToggle{ display:flex; gap:8px; margin:0 0 14px; }
+.modeOption{ flex:1; display:flex; align-items:center; justify-content:center; gap:7px; padding:9px 10px; border:1px solid var(--line); border-radius:12px; background:#fff; cursor:pointer; font-size:13px; font-weight:700; color:var(--muted); }
+.modeOption input{ accent-color:var(--a2); }
+.modeOption:has(input:checked){ border-color:rgba(91,43,214,.45); background:rgba(91,43,214,.1); color:var(--a2); }
+.specificAdd{ display:flex; gap:8px; align-items:center; margin:4px 0 10px; }
+.specificAdd .input{ flex:1; }
+.specificList{ display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 14px; }
+.dateChip{ display:inline-flex; align-items:center; gap:6px; padding:6px 8px 6px 12px; border:1px solid rgba(91,43,214,.35); background:rgba(91,43,214,.08); color:var(--a2); border-radius:999px; font-size:12.5px; font-weight:700; }
+.dateChipX{ border:none; background:transparent; color:var(--a2); font-size:16px; line-height:1; cursor:pointer; padding:0 2px; }
 .switch{ position:relative; display:inline-block; width:42px; height:24px; }
 .switch input{ opacity:0; width:0; height:0; }
 .switch span{ position:absolute; inset:0; background:var(--muteBg); border-radius:999px; transition:.2s; cursor:pointer; }

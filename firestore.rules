@@ -1,0 +1,78 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email != null;
+    }
+
+    // Correo normalizado (minusculas) del usuario autenticado.
+    function userEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    // Administradores: ven todo, configuran horarios y corrigen registros.
+    function isAdmin() {
+      return signedIn() && userEmail() in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com'
+      ];
+    }
+
+    // Equipo autorizado (lista blanca). Mantener sincronizado con HUB.USERS en app.js.
+    function isTeam() {
+      return signedIn() && userEmail() in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com',
+        'angiecamilar4@gmail.com',
+        'licethrinconr@gmail.com'
+      ];
+    }
+
+    // Un usuario autenticado escribe solo su propio registro de jornada por el flujo normal.
+    // La app ya bloquea el acceso a correos fuera de HUB.USERS; aqui evitamos duplicar
+    // la lista para que QR/remoto no falle cuando el equipo cambia.
+    function writesOwnRecord() {
+      return signedIn()
+        && request.resource.data.email == userEmail()
+        && request.resource.data.role == 'administrativo';
+    }
+
+    function readsOwnResource() {
+      return signedIn() && resource.data.email == userEmail();
+    }
+
+    // ===== Registros de jornada =====
+    match /adminShiftRecords/{recordId} {
+      // Crear/actualizar el propio registro (flujo normal: QR / remoto),
+      // o cualquier registro si eres admin (correcciones y excepciones).
+      allow create, update: if writesOwnRecord() || isAdmin();
+      // Leer: el dueño ve lo suyo; el admin ve todo.
+      allow read: if isAdmin() || readsOwnResource();
+      // Nunca se borra: se usa el estado "voided".
+      allow delete: if false;
+    }
+
+    // ===== Configuracion de horarios por miembro =====
+    match /adminMemberSettings/{memberId} {
+      // El miembro puede leer su propia configuracion; el admin lee todo.
+      allow read: if isAdmin() || readsOwnResource();
+      // Solo admins crean/editan horarios del equipo.
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ===== Excepciones de horario por fecha =====
+    match /adminScheduleOverrides/{overrideId} {
+      allow read: if isAdmin() || readsOwnResource();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Todo lo demas, denegado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
