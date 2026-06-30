@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-27.1";
+const BUILD = "2026-06-30.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -561,6 +561,7 @@ function calculateShiftStatus(record, schedule) {
     status: "sin-registro",
     label: "Sin registro",
     lateMinutes: 0,
+    earlyLeaveMinutes: 0,
     workedMinutes: null,
     expectedMinutes: null,
     isLate: false,
@@ -611,7 +612,10 @@ function calculateShiftStatus(record, schedule) {
   if (!hasSalida) { out.isIncomplete = true; out.flags.push("incompleto"); }
   if (hasSalida && endMin != null) {
     const salMin = toMinutes(salida);
-    if (salMin != null && salMin < endMin - grace) { out.leftEarly = true; out.flags.push("salida-temprana"); }
+    if (salMin != null) {
+      out.earlyLeaveMinutes = Math.max(0, endMin - salMin);
+      if (out.earlyLeaveMinutes > grace) { out.leftEarly = true; out.flags.push("salida-temprana"); }
+    }
   }
   return finalizeStatus(out, record);
 }
@@ -642,7 +646,8 @@ function calculateStats(records, range) {
   const global = {
     expectedDays: 0, registeredDays: 0, completeDays: 0, incompleteDays: 0,
     onTime: 0, late: 0, absent: 0, extra: 0, leftEarly: 0, justified: 0,
-    totalLateMinutes: 0, totalWorkedMinutes: 0, arrivalMinutesSum: 0, arrivalCount: 0
+    totalLateMinutes: 0, totalEarlyLeaveMinutes: 0, totalWorkedMinutes: 0, totalExpectedMinutes: 0,
+    totalDeficitMinutes: 0, totalExtraMinutes: 0, arrivalMinutesSum: 0, arrivalCount: 0
   };
   const perMember = {};
   const perDay = {};
@@ -650,12 +655,14 @@ function calculateStats(records, range) {
   for (const m of members) {
     perMember[m.email] = {
       email: m.email, name: m.name, expected: 0, registered: 0, onTime: 0, late: 0,
-      absent: 0, incomplete: 0, lateMinutes: 0, workedMinutes: 0, arrivalSum: 0, arrivalCount: 0, justified: 0
+      absent: 0, incomplete: 0, lateMinutes: 0, earlyLeaveMinutes: 0, expectedMinutes: 0,
+      workedMinutes: 0, deficitMinutes: 0, extraMinutes: 0, arrivalSum: 0, arrivalCount: 0, justified: 0
     };
   }
 
   for (const date of days) {
-    perDay[date] = { date, expected: 0, onTime: 0, late: 0, absent: 0, incomplete: 0, registered: 0 };
+    perDay[date] = { date, expected: 0, onTime: 0, late: 0, absent: 0, incomplete: 0, registered: 0,
+      expectedMinutes: 0, workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, deficitMinutes: 0, extraMinutes: 0 };
     for (const m of members) {
       const schedule = getExpectedScheduleForDate(m.email, date);
       const rec = byKey[`${m.email}__${date}`];
@@ -680,23 +687,43 @@ function calculateStats(records, range) {
       const pm = perMember[m.email];
       if (schedule) {
         global.expectedDays++; pm.expected++; perDay[date].expected++;
+        const expectedMinutes = calc.expectedMinutes || 0;
+        global.totalExpectedMinutes += expectedMinutes;
+        pm.expectedMinutes += expectedMinutes;
+        perDay[date].expectedMinutes += expectedMinutes;
       }
       if (rec && rec.ingresoTime) {
         global.registeredDays++; pm.registered++; perDay[date].registered++;
         const ingMin = toMinutes(rec.ingresoTime);
         if (ingMin != null) { global.arrivalMinutesSum += ingMin; global.arrivalCount++; pm.arrivalSum += ingMin; pm.arrivalCount++; }
-        if (calc.workedMinutes != null) { global.totalWorkedMinutes += calc.workedMinutes; pm.workedMinutes += calc.workedMinutes; }
+        if (calc.workedMinutes != null) {
+          global.totalWorkedMinutes += calc.workedMinutes; pm.workedMinutes += calc.workedMinutes; perDay[date].workedMinutes += calc.workedMinutes;
+          const balance = calc.workedMinutes - (calc.expectedMinutes || 0);
+          if (balance < 0) {
+            global.totalDeficitMinutes += Math.abs(balance); pm.deficitMinutes += Math.abs(balance); perDay[date].deficitMinutes += Math.abs(balance);
+          } else {
+            global.totalExtraMinutes += balance; pm.extraMinutes += balance; perDay[date].extraMinutes += balance;
+          }
+        }
         if (calc.isIncomplete) { global.incompleteDays++; pm.incomplete++; perDay[date].incomplete++; }
         else global.completeDays++;
         if (calc.justified) { global.justified++; pm.justified++; }
         else if (calc.isLate) {
           global.late++; pm.late++; perDay[date].late++;
           global.totalLateMinutes += calc.lateMinutes; pm.lateMinutes += calc.lateMinutes;
+          perDay[date].lateMinutes += calc.lateMinutes;
         } else if (calc.isOnTime) { global.onTime++; pm.onTime++; perDay[date].onTime++; }
-        if (calc.leftEarly) global.leftEarly++;
+        if (calc.leftEarly) {
+          global.leftEarly++;
+          global.totalEarlyLeaveMinutes += calc.earlyLeaveMinutes;
+          pm.earlyLeaveMinutes += calc.earlyLeaveMinutes;
+          perDay[date].earlyLeaveMinutes += calc.earlyLeaveMinutes;
+        }
         if (calc.isExtra) global.extra++;
       } else if (schedule) {
         global.absent++; pm.absent++; perDay[date].absent++;
+        const missed = calc.expectedMinutes || 0;
+        global.totalDeficitMinutes += missed; pm.deficitMinutes += missed; perDay[date].deficitMinutes += missed;
       }
     }
   }
@@ -706,6 +733,9 @@ function calculateStats(records, range) {
   global.avgLateMinutes = global.late ? Math.round(global.totalLateMinutes / global.late) : 0;
   global.avgArrival = global.arrivalCount ? minutesToHhmmClock(Math.round(global.arrivalMinutesSum / global.arrivalCount)) : "-";
   global.attendancePct = global.expectedDays ? Math.round((global.registeredDays / global.expectedDays) * 100) : 0;
+  global.compliancePct = global.totalExpectedMinutes ? Math.round((global.totalWorkedMinutes / global.totalExpectedMinutes) * 100) : 0;
+  global.netBalanceMinutes = global.totalWorkedMinutes - global.totalExpectedMinutes;
+  global.totalImpactMinutes = global.totalLateMinutes + global.totalEarlyLeaveMinutes;
 
   const memberRows = Object.values(perMember).map((pm) => {
     const ev = pm.onTime + pm.late;
@@ -713,9 +743,17 @@ function calculateStats(records, range) {
       ...pm,
       punctualityPct: ev ? Math.round((pm.onTime / ev) * 100) : 0,
       avgArrival: pm.arrivalCount ? minutesToHhmmClock(Math.round(pm.arrivalSum / pm.arrivalCount)) : "-",
-      avgArrivalMin: pm.arrivalCount ? Math.round(pm.arrivalSum / pm.arrivalCount) : null
+      avgArrivalMin: pm.arrivalCount ? Math.round(pm.arrivalSum / pm.arrivalCount) : null,
+      compliancePct: pm.expectedMinutes ? Math.round((pm.workedMinutes / pm.expectedMinutes) * 100) : 0,
+      netBalanceMinutes: pm.workedMinutes - pm.expectedMinutes
     };
   });
+
+  for (const day of Object.values(perDay)) {
+    day.compliancePct = day.expectedMinutes ? Math.round((day.workedMinutes / day.expectedMinutes) * 100) : 0;
+    day.netBalanceMinutes = day.workedMinutes - day.expectedMinutes;
+    day.impactMinutes = day.lateMinutes + day.earlyLeaveMinutes;
+  }
 
   return { global, memberRows, dayRows: Object.values(perDay), days };
 }
@@ -724,6 +762,11 @@ function minutesToHhmmClock(min) {
   if (min == null || isNaN(min)) return "-";
   const h = Math.floor(min / 60), m = min % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function signedMinutesToHhmm(min) {
+  const value = Number(min) || 0;
+  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${minutesToHhmm(Math.abs(value))}`;
 }
 
 function adminMemberList() {
@@ -2061,7 +2104,11 @@ function renderStatsUI() {
       ${kpiCard("Ausencias", g.absent, "segun horario", g.absent ? "absent" : "ok")}
       ${kpiCard("Jornadas incompletas", g.incompleteDays, "sin salida", g.incompleteDays ? "warn" : "ok")}
       ${kpiCard("Horas trabajadas", minutesToHhmm(g.totalWorkedMinutes), "registradas", "")}
+      ${kpiCard("Horas programadas", minutesToHhmm(g.totalExpectedMinutes), `${g.expectedDays} jornadas`, "info")}
+      ${kpiCard("Cumplimiento horario", g.compliancePct + "%", "trabajadas / programadas", g.compliancePct >= 95 ? "ok" : "warn")}
+      ${kpiCard("Balance de horas", signedMinutesToHhmm(g.netBalanceMinutes), g.netBalanceMinutes < 0 ? "déficit del periodo" : "excedente del periodo", g.netBalanceMinutes < 0 ? "late" : "ok")}
       ${kpiCard("Minutos tarde", g.totalLateMinutes, "acumulados", "")}
+      ${kpiCard("Impacto de puntualidad", minutesToHhmm(g.totalImpactMinutes), "tardanzas + salidas tempranas", g.totalImpactMinutes ? "warn" : "ok")}
       ${kpiCard("Hora prom. llegada", g.avgArrival, "promedio del equipo", "")}
       ${kpiCard("Salidas tempranas", g.leftEarly, "antes de lo esperado", g.leftEarly ? "warn" : "ok")}
       ${kpiCard("Justificados", g.justified, "registros", "info")}
@@ -2082,7 +2129,7 @@ function renderStatsUI() {
       <h3 class="sectionH">Resumen por miembro</h3>
       <div class="tableWrap">
         <table class="dataTable">
-          <thead><tr><th>Miembro</th><th>Esper.</th><th>Reg.</th><th>Punt.</th><th>Tarde</th><th>Ausen.</th><th>Incompl.</th><th>Min tarde</th><th>% Punt.</th><th>Prom. lleg.</th><th>Horas</th></tr></thead>
+          <thead><tr><th>Miembro</th><th>Esper.</th><th>Reg.</th><th>Punt.</th><th>Tarde</th><th>Ausen.</th><th>Incompl.</th><th>Impacto</th><th>% Punt.</th><th>Horas trab.</th><th>Horas prog.</th><th>Cumpl.</th><th>Balance</th></tr></thead>
           <tbody>
             ${stats.memberRows.map((m) => `<tr>
               <td data-label="Miembro"><strong>${escapeHtml(m.name)}</strong></td>
@@ -2092,14 +2139,34 @@ function renderStatsUI() {
               <td data-label="Tarde">${m.late}</td>
               <td data-label="Ausen.">${m.absent}</td>
               <td data-label="Incompl.">${m.incomplete}</td>
-              <td data-label="Min tarde">${m.lateMinutes}</td>
+              <td data-label="Impacto">${minutesToHhmm(m.lateMinutes + m.earlyLeaveMinutes)}</td>
               <td data-label="% Punt."><span class="badgeChip ${m.punctualityPct >= 80 ? "ok" : (m.punctualityPct >= 60 ? "warn" : "late")}">${m.punctualityPct}%</span></td>
-              <td data-label="Prom. lleg.">${escapeHtml(m.avgArrival)}</td>
-              <td data-label="Horas">${minutesToHhmm(m.workedMinutes)}</td>
+              <td data-label="Horas trab.">${minutesToHhmm(m.workedMinutes)}</td>
+              <td data-label="Horas prog.">${minutesToHhmm(m.expectedMinutes)}</td>
+              <td data-label="Cumpl."><span class="badgeChip ${m.compliancePct >= 95 ? "ok" : (m.compliancePct >= 85 ? "warn" : "late")}">${m.compliancePct}%</span></td>
+              <td data-label="Balance">${signedMinutesToHhmm(m.netBalanceMinutes)}</td>
             </tr>`).join("")}
           </tbody>
         </table>
       </div>
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">⏱️ Impacto diario sobre la jornada</h3>
+      <p class="sectionSub">Compara capacidad programada, tiempo registrado y minutos afectados por tardanzas o salidas tempranas.</p>
+      <div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Programado</th><th>Trabajado</th><th>Cumplimiento</th><th>Tardanzas</th><th>Salidas temp.</th><th>Impacto</th><th>Balance</th></tr></thead>
+        <tbody>${stats.dayRows.slice().reverse().map((d) => `<tr>
+          <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
+          <td data-label="Programado">${minutesToHhmm(d.expectedMinutes)}</td>
+          <td data-label="Trabajado">${minutesToHhmm(d.workedMinutes)}</td>
+          <td data-label="Cumplimiento"><span class="badgeChip ${d.compliancePct >= 95 ? "ok" : (d.compliancePct >= 85 ? "warn" : "late")}">${d.compliancePct}%</span></td>
+          <td data-label="Tardanzas">${minutesToHhmm(d.lateMinutes)}</td>
+          <td data-label="Salidas temp.">${minutesToHhmm(d.earlyLeaveMinutes)}</td>
+          <td data-label="Impacto">${minutesToHhmm(d.impactMinutes)}</td>
+          <td data-label="Balance">${signedMinutesToHhmm(d.netBalanceMinutes)}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>
     </section>
 
     <section class="dashSection">
@@ -2148,7 +2215,8 @@ function copyStatsSummary(stats, r) {
     `Jornadas esperadas: ${g.expectedDays} · registradas: ${g.registeredDays} (${g.attendancePct}%)`,
     `Puntualidad global: ${g.punctualityPct}% · Puntuales: ${g.onTime} · Tarde: ${g.late}`,
     `Ausencias: ${g.absent} · Incompletas: ${g.incompleteDays} · Salidas tempranas: ${g.leftEarly}`,
-    `Minutos tarde acumulados: ${g.totalLateMinutes} (prom ${g.avgLateMinutes}) · Horas trabajadas: ${minutesToHhmm(g.totalWorkedMinutes)}`,
+    `Horas programadas: ${minutesToHhmm(g.totalExpectedMinutes)} · trabajadas: ${minutesToHhmm(g.totalWorkedMinutes)} · cumplimiento: ${g.compliancePct}% · balance: ${signedMinutesToHhmm(g.netBalanceMinutes)}`,
+    `Impacto de puntualidad: ${minutesToHhmm(g.totalImpactMinutes)} (${g.totalLateMinutes} min tarde + ${g.totalEarlyLeaveMinutes} min por salidas tempranas)`,
     `Hora promedio de llegada: ${g.avgArrival}`
   ];
   copyText(lines.join("\n"), "Resumen copiado");
@@ -2156,7 +2224,7 @@ function copyStatsSummary(stats, r) {
 function copyStatsReport(stats, r, best) {
   const g = stats.global;
   const top = best.slice(0, 3).map((m) => `${m.name} (${m.punctualityPct}%)`).join(", ") || "sin datos";
-  const report = `Durante el periodo del ${r.from} al ${r.to} se esperaban ${g.expectedDays} jornadas. Se registraron ${g.registeredDays} (${g.attendancePct}% de asistencia), de las cuales ${g.completeDays} fueron jornadas completas. La puntualidad global fue del ${g.punctualityPct}%, con ${g.late} llegadas tarde (promedio de ${g.avgLateMinutes} minutos) y ${g.absent} ausencias detectadas segun horario. Se acumularon ${minutesToHhmm(g.totalWorkedMinutes)} de trabajo registrado. Los miembros con mayor cumplimiento fueron: ${top}.`;
+  const report = `Durante el periodo del ${r.from} al ${r.to} se esperaban ${g.expectedDays} jornadas. Se registraron ${g.registeredDays} (${g.attendancePct}% de asistencia), de las cuales ${g.completeDays} fueron jornadas completas. La puntualidad global fue del ${g.punctualityPct}%, con ${g.late} llegadas tarde (promedio de ${g.avgLateMinutes} minutos) y ${g.absent} ausencias. Se programaron ${minutesToHhmm(g.totalExpectedMinutes)} y se registraron ${minutesToHhmm(g.totalWorkedMinutes)}, para un cumplimiento horario del ${g.compliancePct}% y un balance de ${signedMinutesToHhmm(g.netBalanceMinutes)}. Tardanzas y salidas tempranas afectaron ${minutesToHhmm(g.totalImpactMinutes)}. Los miembros con mayor puntualidad fueron: ${top}.`;
   copyText(report, "Reporte copiado");
 }
 

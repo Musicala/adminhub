@@ -7,6 +7,12 @@ service cloud.firestore {
       return request.auth != null && request.auth.token.email != null;
     }
 
+    // Las pruebas de nomina de Cata usan exclusivamente cuentas de Google.
+    function googleUser() {
+      return signedIn()
+        && request.auth.token.firebase.sign_in_provider == "google.com";
+    }
+
     // Correo normalizado (minusculas) del usuario autenticado.
     function userEmail() {
       return request.auth.token.email.lower();
@@ -43,6 +49,96 @@ service cloud.firestore {
       return signedIn() && resource.data.email == userEmail();
     }
 
+    // ===== Manager Musicala =====
+    function managerUserDocPath() {
+      return /databases/$(database)/documents/apps/manager-musicala/users/$(request.auth.uid);
+    }
+
+    function managerHasUserDoc() {
+      return signedIn() && exists(managerUserDocPath());
+    }
+
+    function managerUserDoc() {
+      return get(managerUserDocPath()).data;
+    }
+
+    function isManagerBootstrapAdmin() {
+      return signedIn() && userEmail() in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com'
+      ];
+    }
+
+    // Invitacion de asistente por correo: el id del documento es el correo
+    // (en minusculas). Cada persona puede leer la suya y, si esta activa,
+    // entra directo como asistente.
+    function managerAssistantInvitePath() {
+      return /databases/$(database)/documents/apps/manager-musicala/assistantInvites/$(userEmail());
+    }
+
+    function managerHasActiveInvite() {
+      return signedIn()
+        && exists(managerAssistantInvitePath())
+        && get(managerAssistantInvitePath()).data.active == true;
+    }
+
+    function isManagerActiveAdmin() {
+      return signedIn() && (
+        isManagerBootstrapAdmin() ||
+        (
+          managerHasUserDoc()
+          && managerUserDoc().active == true
+          && managerUserDoc().role == 'admin'
+        )
+      );
+    }
+
+    function isManagerActiveUser() {
+      return signedIn() && (
+        isManagerBootstrapAdmin() ||
+        managerHasActiveInvite() ||
+        (
+          managerHasUserDoc()
+          && managerUserDoc().active == true
+        )
+      );
+    }
+
+    function isManagerCertificateManager() {
+      return signedIn() && (
+        isManagerBootstrapAdmin() ||
+        managerHasActiveInvite() ||
+        (
+          managerHasUserDoc()
+          && managerUserDoc().active == true
+          && managerUserDoc().role in ['admin', 'asistente']
+        )
+      );
+    }
+
+    function managerValidSelfCreate(userId) {
+      return signedIn()
+        && userId == request.auth.uid
+        && request.resource.data.email == userEmail()
+        && (
+          (
+            isManagerBootstrapAdmin()
+            && request.resource.data.role == 'admin'
+            && request.resource.data.active == true
+          ) || (
+            !isManagerBootstrapAdmin()
+            && managerHasActiveInvite()
+            && request.resource.data.role == 'asistente'
+            && request.resource.data.active == true
+          ) || (
+            !isManagerBootstrapAdmin()
+            && !managerHasActiveInvite()
+            && request.resource.data.role in ['docente', 'asistente']
+            && request.resource.data.active == false
+          )
+        );
+    }
+
     // ===== Registros de jornada =====
     match /adminShiftRecords/{recordId} {
       // Crear/actualizar el propio registro (flujo normal: QR / remoto),
@@ -68,6 +164,143 @@ service cloud.firestore {
       allow read: if isAdmin() || readsOwnResource();
       allow create, update: if isAdmin();
       allow delete: if isAdmin();
+    }
+
+    // ===== Datos aislados de Manager Musicala =====
+    match /apps/manager-musicala {
+      allow read, write: if false;
+
+      match /users/{userId} {
+        allow get: if signedIn() && (userId == request.auth.uid || isManagerActiveAdmin());
+        allow list: if isManagerActiveAdmin();
+        allow create: if managerValidSelfCreate(userId) || isManagerActiveAdmin();
+        allow update: if isManagerActiveAdmin() || (
+          signedIn()
+          && userId == request.auth.uid
+          && (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'updatedAt', 'lastLoginAt'])
+            || (
+              managerHasActiveInvite()
+              && request.resource.data.role == 'asistente'
+              && request.resource.data.active == true
+            )
+          )
+        );
+        allow delete: if isManagerActiveAdmin();
+      }
+
+      match /buttons/{buttonId} {
+        allow read: if isManagerActiveUser();
+        allow create, update, delete: if isManagerActiveAdmin();
+      }
+
+      match /schedule/{taskId} {
+        allow read: if isManagerActiveUser();
+        allow create, update, delete: if isManagerActiveAdmin();
+      }
+
+      match /legacyUsers/{legacyId} {
+        allow read, write, delete: if isManagerActiveAdmin();
+      }
+
+      match /userInvites/{inviteId} {
+        allow read, write, delete: if isManagerActiveAdmin();
+      }
+
+      match /imports/{importId} {
+        allow read, write, delete: if isManagerActiveAdmin();
+      }
+
+      match /managerSettings/{settingId} {
+        allow read: if isManagerActiveUser();
+        allow write, delete: if isManagerActiveAdmin();
+      }
+
+      match /taskTemplates/{templateId} {
+        allow read: if isManagerActiveAdmin();
+        allow write, delete: if isManagerActiveAdmin();
+      }
+
+      match /certificates/{certificateId} {
+        allow read: if isManagerActiveUser();
+        allow create, update, delete: if isManagerCertificateManager();
+      }
+
+      // Novedades de nomina: cualquier cuenta Google puede crear y consultar.
+      // Una novedad creada solo puede cambiar de estado y registrar quien/cuando
+      // hizo el cambio; no se permite borrar el historial.
+      match /novedades_nomina/{docId} {
+        allow create, read: if googleUser();
+        allow update: if googleUser()
+          && request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(['estado', 'actualizadoPor', 'actualizadoEn']);
+        allow delete: if false;
+      }
+
+      // Directorio de empleados usado por el flujo de nomina de Cata.
+      match /empleados/{docId} {
+        allow create, read, update: if googleUser();
+        allow delete: if false;
+      }
+
+      // Notas personales del equipo. Cada usuario gestiona las suyas; los
+      // administradores ven y auditan todas. Nunca se eliminan físicamente.
+      match /workNotes/{noteId} {
+        allow create: if isManagerActiveUser()
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.deleted == false;
+        allow read: if isManagerActiveAdmin()
+          || (isManagerActiveUser() && resource.data.ownerUid == request.auth.uid);
+        allow update: if isManagerActiveAdmin() || (
+          isManagerActiveUser()
+          && resource.data.ownerUid == request.auth.uid
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.ownerEmail == resource.data.ownerEmail
+        );
+        allow delete: if false;
+      }
+
+      match /workNotePreferences/{userId} {
+        allow read, create, update: if isManagerActiveAdmin()
+          || (isManagerActiveUser() && userId == request.auth.uid);
+        allow delete: if false;
+      }
+
+      // Directorio de asistentes por correo (id del doc = correo en minusculas).
+      // Cada persona puede leer su propia invitacion para entrar directo.
+      match /assistantInvites/{inviteEmail} {
+        allow get: if isManagerActiveAdmin() || (signedIn() && inviteEmail == userEmail());
+        allow list: if isManagerActiveAdmin();
+        allow create, update, delete: if isManagerActiveAdmin();
+      }
+
+      // Candados (MusiLockers): todo el equipo activo ve; admin y asistentes gestionan.
+      match /lockers/{lockerId} {
+        allow read: if isManagerActiveUser();
+        allow create, update, delete: if isManagerCertificateManager();
+      }
+    }
+
+    // ===== Compras internas Musicala (aislado) =====
+    // Datos exclusivos del aplicativo de compras. No toca ninguna otra coleccion.
+    // Equipo autorizado sincronizado con ALLOWED_EMAILS en app.js.
+    match /apps/compras-musicala {
+      allow read, write: if false;
+
+      function comprasTeam() {
+        return signedIn() && userEmail() in [
+          'alekcaballeromusic@gmail.com',
+          'catalina.medina.leal@gmail.com',
+          'adminmusicala@gmail.com',
+          'musicalaasesor@gmail.com'
+        ];
+      }
+
+      match /items/{itemId} {
+        allow read, create, update: if comprasTeam();
+        // Nunca se borra: se usa el estado "descartado".
+        allow delete: if false;
+      }
     }
 
     // Todo lo demas, denegado.
