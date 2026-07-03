@@ -651,6 +651,14 @@ function calculateStats(records, range) {
   };
   const perMember = {};
   const perDay = {};
+  const lateDetails = [];
+  const perMonth = {};
+  const monthCell = (date, m) => {
+    const key = date.slice(0, 7);
+    if (!perMonth[key]) perMonth[key] = {};
+    if (!perMonth[key][m.email]) perMonth[key][m.email] = { month: key, email: m.email, name: m.name, worked: 0, expected: 0 };
+    return perMonth[key][m.email];
+  };
 
   for (const m of members) {
     perMember[m.email] = {
@@ -691,9 +699,11 @@ function calculateStats(records, range) {
         global.totalExpectedMinutes += expectedMinutes;
         pm.expectedMinutes += expectedMinutes;
         perDay[date].expectedMinutes += expectedMinutes;
+        monthCell(date, m).expected++;
       }
       if (rec && rec.ingresoTime) {
         global.registeredDays++; pm.registered++; perDay[date].registered++;
+        monthCell(date, m).worked++;
         const ingMin = toMinutes(rec.ingresoTime);
         if (ingMin != null) { global.arrivalMinutesSum += ingMin; global.arrivalCount++; pm.arrivalSum += ingMin; pm.arrivalCount++; }
         if (calc.workedMinutes != null) {
@@ -712,6 +722,12 @@ function calculateStats(records, range) {
           global.late++; pm.late++; perDay[date].late++;
           global.totalLateMinutes += calc.lateMinutes; pm.lateMinutes += calc.lateMinutes;
           perDay[date].lateMinutes += calc.lateMinutes;
+          lateDetails.push({
+            date, email: m.email, name: m.name,
+            expectedStart: schedule?.start || "-",
+            arrival: rec.ingresoTime,
+            lateMinutes: calc.lateMinutes
+          });
         } else if (calc.isOnTime) { global.onTime++; pm.onTime++; perDay[date].onTime++; }
         if (calc.leftEarly) {
           global.leftEarly++;
@@ -755,7 +771,16 @@ function calculateStats(records, range) {
     day.impactMinutes = day.lateMinutes + day.earlyLeaveMinutes;
   }
 
-  return { global, memberRows, dayRows: Object.values(perDay), days };
+  lateDetails.sort((a, b) => (a.date === b.date ? b.lateMinutes - a.lateMinutes : (a.date < b.date ? 1 : -1)));
+
+  const monthRows = Object.keys(perMonth).sort().flatMap((key) =>
+    Object.values(perMonth[key])
+      .filter((c) => c.worked || c.expected)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((c) => ({ ...c, attendancePct: c.expected ? Math.round((c.worked / c.expected) * 100) : null }))
+  );
+
+  return { global, memberRows, dayRows: Object.values(perDay), days, lateDetails, monthRows };
 }
 
 function minutesToHhmmClock(min) {
@@ -872,7 +897,7 @@ function setupInstallPrompt() {
 ========================================================================== */
 const TABS = [
   { id: "inicio", label: "Inicio", admin: false },
-  { id: "jornada", label: "Marcar", admin: false },
+  { id: "jornada", label: "Marcar", admin: false, memberOnly: true },
   { id: "calendario", label: "Horario anual", admin: false },
   { id: "registros", label: "Registros", admin: false },
   { id: "stats", label: "Estadísticas", admin: true },
@@ -884,7 +909,7 @@ function renderNav() {
   const nav = $("#panel-nav");
   if (!nav) return;
   const admin = isCurrentUserAdmin();
-  nav.innerHTML = TABS.filter((t) => !t.admin || admin).map((t) => `
+  nav.innerHTML = TABS.filter((t) => (!t.admin || admin) && !(t.memberOnly && admin)).map((t) => `
     <button class="navItem${t.id === CURRENT_TAB ? " active" : ""}" type="button" data-tab="${t.id}">
       <span class="navLbl">${escapeHtml(t.label)}</span>
     </button>
@@ -901,6 +926,7 @@ function renderNav() {
 async function goTab(tab) {
   const def = TABS.find((t) => t.id === tab);
   if (def?.admin && !isCurrentUserAdmin()) { toast("No tienes permisos para esta seccion.", { kind: "warn" }); return; }
+  if (def?.memberOnly && isCurrentUserAdmin()) { tab = "inicio"; }
   CURRENT_TAB = tab;
   renderNav();
   await stopQrScanner();
@@ -1007,7 +1033,7 @@ function renderMemberDashboard(records, date) {
 }
 
 function renderAdminDashboard(records, date) {
-  const members = adminMemberList();
+  const members = statsMemberList();
   const todayRecs = records.filter((r) => r.date === date);
   const byEmail = {}; todayRecs.forEach((r) => { byEmail[r.email] = r; });
 
@@ -1172,7 +1198,8 @@ function calendarMembers() {
     const own = MEMBER_SETTINGS[ACTIVE_EMAIL] || defaultSettingsFor(ACTIVE_EMAIL, { seeded: true });
     return [{ email: ACTIVE_EMAIL, name: own.name || getProfileName(ACTIVE_EMAIL), settings: own, active: true }];
   }
-  return adminMemberList();
+  // Los admins solo consultan calendarios de las trabajadoras, no los propios
+  return adminMemberList().filter((m) => !isAdminEmail(m.email));
 }
 
 function annualCalendarStats(email, year) {
@@ -1250,6 +1277,7 @@ async function renderAnnualCalendarTab() {
   const members = calendarMembers();
   CALENDAR_EMAIL = CALENDAR_EMAIL && members.some((m) => m.email === CALENDAR_EMAIL) ? CALENDAR_EMAIL : (isCurrentUserAdmin() ? (members.find((m) => !isAdminEmail(m.email))?.email || members[0]?.email || ACTIVE_EMAIL) : ACTIVE_EMAIL);
   const activeMember = members.find((m) => m.email === CALENDAR_EMAIL) || members[0];
+  if (!activeMember) { setPanel(`<div class="emptyState">No hay trabajadoras activas para mostrar.</div>`); return; }
   await loadLegacyAnnualSchedule(activeMember.email, CALENDAR_YEAR);
   const stats = annualCalendarStats(activeMember.email, CALENDAR_YEAR);
   setPanel(`
@@ -2126,6 +2154,34 @@ function renderStatsUI() {
     </div>
 
     <section class="dashSection">
+      <h3 class="sectionH">🕓 Detalle de tardanzas</h3>
+      <p class="sectionSub">Cada llegada tarde del periodo: a qué hora debía llegar y a qué hora marcó.</p>
+      ${stats.lateDetails.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Miembro</th><th>Debía llegar</th><th>Marcó</th><th>Retraso</th></tr></thead>
+        <tbody>${stats.lateDetails.map((d) => `<tr>
+          <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
+          <td data-label="Miembro">${escapeHtml(d.name)}</td>
+          <td data-label="Debía llegar">${escapeHtml(d.expectedStart)}</td>
+          <td data-label="Marcó"><span class="badgeChip late">${escapeHtml(d.arrival)}</span></td>
+          <td data-label="Retraso">${d.lateMinutes} min</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">Sin llegadas tarde en el periodo. 🎉</div>`}
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">📆 Días trabajados por mes</h3>
+      <p class="sectionSub">Días con jornada registrada frente a los días programados de cada mes.</p>
+      ${stats.monthRows.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Mes</th><th>Miembro</th><th>Días trabajados</th><th>Días programados</th><th>Asistencia</th></tr></thead>
+        <tbody>${stats.monthRows.map((row) => `<tr>
+          <td data-label="Mes"><strong>${escapeHtml(monthKeyLabel(row.month))}</strong></td>
+          <td data-label="Miembro">${escapeHtml(row.name)}</td>
+          <td data-label="Días trabajados">${row.worked}</td>
+          <td data-label="Días programados">${row.expected}</td>
+          <td data-label="Asistencia">${row.attendancePct == null ? "-" : `<span class="badgeChip ${row.attendancePct >= 90 ? "ok" : (row.attendancePct >= 70 ? "warn" : "late")}">${row.attendancePct}%</span>`}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">Sin datos en el periodo.</div>`}
+    </section>
+
+    <section class="dashSection">
       <h3 class="sectionH">Resumen por miembro</h3>
       <div class="tableWrap">
         <table class="dataTable">
@@ -2185,6 +2241,11 @@ function renderStatsUI() {
   $("#btn-copy-report").addEventListener("click", () => copyStatsReport(stats, r, bestMembers));
 }
 
+function monthKeyLabel(key) {
+  const [y, mo] = key.split("-");
+  const name = MONTH_NAMES[Number(mo) - 1] || key;
+  return `${name} ${y}`;
+}
 function maxPct(v, max) { return max ? Math.round((v / max) * 100) : 0; }
 function barHtml(pct, tone) { return `<div class="bar"><div class="barFill ${tone}" style="width:${Math.max(3, Math.min(100, pct))}%"></div></div>`; }
 function rankRow(pos, name, value, bar) {
@@ -2235,7 +2296,7 @@ async function renderConfigTab() {
   if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
   setPanel(`<div class="loadingBlock">Cargando configuracion…</div>`);
   await loadAdminData({ force: true }).catch(() => {});
-  const members = adminMemberList();
+  const members = statsMemberList();
   CONFIG_EMAIL = CONFIG_EMAIL && members.some((m) => m.email === CONFIG_EMAIL) ? CONFIG_EMAIL : (members[0]?.email || "");
   setPanel(`
     <section class="dashHead">
