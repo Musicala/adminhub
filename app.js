@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-03.5";
+const BUILD = "2026-07-03.6";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -661,6 +661,7 @@ function calculateStats(records, range) {
   const perMember = {};
   const perDay = {};
   const lateDetails = [];
+  const missingDetails = [];
   const perMonth = {};
   const monthCell = (date, m) => {
     const key = date.slice(0, 7);
@@ -749,6 +750,11 @@ function calculateStats(records, range) {
         global.absent++; pm.absent++; perDay[date].absent++;
         const missed = calc.expectedMinutes || 0;
         global.totalDeficitMinutes += missed; pm.deficitMinutes += missed; perDay[date].deficitMinutes += missed;
+        missingDetails.push({
+          date, email: m.email, name: m.name,
+          expectedStart: schedule.start, expectedEnd: schedule.end,
+          modality: schedule.modality || "sede"
+        });
       }
     }
   }
@@ -789,7 +795,8 @@ function calculateStats(records, range) {
       .map((c) => ({ ...c, attendancePct: c.expected ? Math.round((c.worked / c.expected) * 100) : null }))
   );
 
-  return { global, memberRows, dayRows: Object.values(perDay), days, lateDetails, monthRows };
+  missingDetails.sort((a, b) => a.date < b.date ? 1 : -1);
+  return { global, memberRows, dayRows: Object.values(perDay), days, lateDetails, missingDetails, monthRows };
 }
 
 function minutesToHhmmClock(min) {
@@ -2079,6 +2086,108 @@ async function saveRecordCorrection(id, patch, reason) {
   }
 }
 
+function openCreateMissingRecordModal(email, date) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos para crear registros.", { kind: "warn" }); return; }
+  const member = adminMemberList().find((item) => item.email === email);
+  const schedule = getExpectedScheduleForDate(email, date);
+  if (!member || !schedule) { toast("No se encontró el horario programado para ese día.", { kind: "warn" }); return; }
+  openModal("Registrar jornada faltante", `${member.name} · ${date}`, "Corrección admin", `
+    <p class="modalNote">Este registro será creado por un administrador porque la persona trabajó, pero su marcación no quedó guardada. La creación quedará identificada y auditada.</p>
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Hora de ingreso</span><input type="time" id="m-ingreso" class="input" value="${escapeHtml(schedule.start)}"></label>
+      <label class="field"><span class="fieldLabel">Hora de salida</span><input type="time" id="m-salida" class="input" value="${escapeHtml(schedule.end)}"></label>
+      <label class="field"><span class="fieldLabel">Modalidad del día</span>
+        <select id="m-modalidad" class="input">
+          ${["sede", "remoto", "flexible"].map((value) => `<option value="${value}" ${schedule.modality === value ? "selected" : ""}>${value}</option>`).join("")}
+        </select>
+      </label>
+      <label class="field"><span class="fieldLabel">Estado</span>
+        <select id="m-status" class="input">
+          <option value="">Automático según la hora</option>
+          <option value="puntual">Contar como puntual (ajuste admin)</option>
+          <option value="justificado">Justificado</option>
+        </select>
+      </label>
+    </div>
+    <label class="field"><span class="fieldLabel">Nota administrativa</span><textarea id="m-notes" class="input" rows="2"></textarea></label>
+    <label class="field"><span class="fieldLabel">Motivo de creación (obligatorio)</span><textarea id="m-reason" class="input" rows="2" placeholder="Ej: trabajó normalmente, pero la app no permitió registrar la jornada."></textarea></label>
+    <div id="m-feedback" class="formFeedback" role="alert" aria-live="assertive" hidden></div>
+    <div class="modalActions">
+      <button class="btnGhost" type="button" id="btn-cancel-missing">Cancelar</button>
+      <button class="btnPrimary" type="button" id="btn-save-missing">Crear jornada</button>
+    </div>
+  `);
+  $("#btn-cancel-missing")?.addEventListener("click", closeModal);
+  $("#btn-save-missing")?.addEventListener("click", async () => {
+    const reason = $("#m-reason").value.trim();
+    const ingresoTime = $("#m-ingreso").value;
+    const salidaTime = $("#m-salida").value;
+    const feedback = $("#m-feedback");
+    if (!ingresoTime || !salidaTime || !reason) {
+      feedback.textContent = "Completa ingreso, salida y motivo para crear la jornada.";
+      feedback.dataset.kind = "warn"; feedback.hidden = false;
+      (!reason ? $("#m-reason") : (!ingresoTime ? $("#m-ingreso") : $("#m-salida"))).focus();
+      return;
+    }
+    if (toMinutes(salidaTime) <= toMinutes(ingresoTime)) {
+      feedback.textContent = "La hora de salida debe ser posterior a la hora de ingreso.";
+      feedback.dataset.kind = "warn"; feedback.hidden = false; $("#m-salida").focus(); return;
+    }
+    if (!confirm(`¿Crear la jornada faltante de ${member.name} para el ${date}?`)) return;
+    const button = $("#btn-save-missing");
+    button.disabled = true; button.textContent = "Creando…";
+    feedback.textContent = "Creando la jornada…"; feedback.dataset.kind = "info"; feedback.hidden = false;
+    const result = await createMissingRecord({
+      email, name: member.name, date, ingresoTime, salidaTime,
+      modalidad: $("#m-modalidad").value, statusOverride: $("#m-status").value,
+      adminNotes: $("#m-notes").value.trim(), reason
+    });
+    if (!result.ok) {
+      button.disabled = false; button.textContent = "Crear jornada";
+      feedback.textContent = result.message; feedback.dataset.kind = "warn"; feedback.hidden = false;
+    }
+  });
+}
+
+async function createMissingRecord(data) {
+  const id = `${safeEmailId(data.email)}_${data.date}`;
+  try {
+    const ref = doc(DB, COLLECTIONS.shiftRecords, id);
+    const existing = await getDoc(ref);
+    if (existing.exists()) return { ok: false, message: "Ya existe un registro para esa persona y fecha. Recarga la vista y edítalo." };
+    const now = Date.now();
+    await setDoc(ref, {
+      role: SHIFT.role, email: data.email, name: data.name, date: data.date,
+      ingresoTime: data.ingresoTime, salidaTime: data.salidaTime, modalidad: data.modalidad,
+      ingresoMode: "manual_admin", salidaMode: "manual_admin",
+      ingresoSource: "manual_admin", salidaSource: "manual_admin",
+      ingresoStamp: `${data.date}T${data.ingresoTime}:00-05:00`,
+      salidaStamp: `${data.date}T${data.salidaTime}:00-05:00`,
+      statusOverride: data.statusOverride, adminNotes: data.adminNotes,
+      manualCorrection: true, correctionReason: data.reason,
+      correctedBy: ACTIVE_EMAIL, correctedAt: serverTimestamp(), correctedAtClient: now,
+      createdByAdmin: true, createdAt: serverTimestamp(), createdAtClient: now,
+      updatedAt: serverTimestamp(), updatedAtClient: now, appBuild: BUILD,
+      correctionHistory: [{
+        correctedBy: ACTIVE_EMAIL, correctedAtClient: now, reason: `CREACIÓN ADMIN: ${data.reason}`,
+        previousData: {}, newData: { ingresoTime: data.ingresoTime, salidaTime: data.salidaTime, modalidad: data.modalidad, statusOverride: data.statusOverride }
+      }]
+    });
+    toast("Jornada faltante creada", { kind: "ok" });
+    await closeModal();
+    await renderAdminStats();
+    return { ok: true };
+  } catch (error) {
+    console.error(error);
+    return {
+      ok: false,
+      message: error?.code === "permission-denied"
+        ? "Firebase rechazó la creación. Verifica que ingresaste con una cuenta administradora."
+        : "No se pudo crear la jornada. Revisa tu conexión e inténtalo de nuevo."
+    };
+  }
+}
+
 async function voidRecord(id, reason) {
   const r = findRecord(id);
   if (!r) return;
@@ -2210,6 +2319,20 @@ function renderStatsUI() {
     </section>
 
     <section class="dashSection">
+      <h3 class="sectionH">📝 Jornadas programadas sin registro</h3>
+      <p class="sectionSub">Si la persona sí trabajó, un administrador puede crear la jornada faltante con sus horas reales y un motivo auditable.</p>
+      ${stats.missingDetails.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Miembro</th><th>Horario programado</th><th>Modalidad</th><th>Acción</th></tr></thead>
+        <tbody>${stats.missingDetails.map((d) => `<tr>
+          <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
+          <td data-label="Miembro">${escapeHtml(d.name)}</td>
+          <td data-label="Horario programado">${escapeHtml(d.expectedStart)} – ${escapeHtml(d.expectedEnd)}</td>
+          <td data-label="Modalidad">${escapeHtml(d.modality)}</td>
+          <td data-label="Acción"><button class="btnGhost btnCompact" type="button" data-create-missing="${escapeHtml(d.email)}" data-date="${escapeHtml(d.date)}">Registrar jornada</button></td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay jornadas programadas pendientes de registro en este periodo.</div>`}
+    </section>
+
+    <section class="dashSection">
       <h3 class="sectionH">📆 Días trabajados por mes</h3>
       <p class="sectionSub">Días con jornada registrada frente a los días programados de cada mes.</p>
       ${stats.monthRows.length ? `<div class="tableWrap"><table class="dataTable">
@@ -2279,6 +2402,7 @@ function renderStatsUI() {
     </section>
   `);
   $$("[data-fix-late]").forEach((button) => button.addEventListener("click", () => openEditRecordModal(button.dataset.fixLate)));
+  $$("[data-create-missing]").forEach((button) => button.addEventListener("click", () => openCreateMissingRecordModal(button.dataset.createMissing, button.dataset.date)));
   wireStatsControls();
   $("#btn-copy-summary").addEventListener("click", () => copyStatsSummary(stats, r));
   $("#btn-copy-report").addEventListener("click", () => copyStatsReport(stats, r, bestMembers));
