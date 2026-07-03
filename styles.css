@@ -1648,6 +1648,10 @@ button[data-id="registrosJornada"] .ico{ background: rgba(104,13,191,.14); }
 .fieldLabel{ font-size:11.5px; font-weight:600; color:var(--muted); }
 .input{ padding:9px 12px; border-radius:12px; border:1px solid var(--line); background:#fff; color:var(--text); font-size:14px; width:100%; }
 .input:focus{ outline:none; box-shadow:var(--ring); border-color:var(--a1); }
+.input.inputError{ border-color:var(--late); box-shadow:0 0 0 3px var(--lateBg); }
+.formFeedback{ margin-top:10px; padding:10px 14px; border-radius:12px; font-size:13px; font-weight:650; }
+.formFeedback[data-kind="warn"]{ background:var(--lateBg); color:var(--late); }
+.formFeedback[data-kind="info"]{ background:var(--infoBg); color:var(--info); }
 .checkField{ flex-direction:row; align-items:center; gap:8px; font-size:13.5px; }
 .checkField input{ width:18px; height:18px; accent-color:var(--a1); }
 textarea.input{ resize:vertical; font-family:inherit; }

@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-06-30.1";
+const BUILD = "2026-07-03.5";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -622,9 +622,18 @@ function calculateShiftStatus(record, schedule) {
 
 function finalizeStatus(out, record) {
   if (record?.statusOverride) {
-    out.status = "justificado";
-    out.label = record.statusOverride === "justificado" ? "Justificado" : record.statusOverride;
-    out.justified = true;
+    if (record.statusOverride === "puntual") {
+      out.status = "puntual";
+      out.label = "Puntual (ajuste admin)";
+      out.isLate = false;
+      out.isOnTime = true;
+      out.lateMinutes = 0;
+      out.flags.push("ajuste-puntual");
+    } else {
+      out.status = "justificado";
+      out.label = record.statusOverride === "justificado" ? "Justificado" : record.statusOverride;
+      out.justified = true;
+    }
   }
   if (out.edited) out.flags.push("editado");
   return out;
@@ -723,7 +732,7 @@ function calculateStats(records, range) {
           global.totalLateMinutes += calc.lateMinutes; pm.lateMinutes += calc.lateMinutes;
           perDay[date].lateMinutes += calc.lateMinutes;
           lateDetails.push({
-            date, email: m.email, name: m.name,
+            id: rec.id, date, email: m.email, name: m.name,
             expectedStart: schedule?.start || "-",
             arrival: rec.ingresoTime,
             lateMinutes: calc.lateMinutes
@@ -1919,7 +1928,9 @@ function openModal(title, subtitle, eyebrow, html) {
   $("#modal-workspace").hidden = false;
 }
 
-function findRecord(id) { return RECORDS_CACHE.find((r) => r.id === id); }
+function findRecord(id) {
+  return RECORDS_CACHE.find((r) => r.id === id) || STATS_RECORDS.find((r) => r.id === id);
+}
 
 async function openRecordDetail(id) {
   const r = findRecord(id);
@@ -1975,12 +1986,14 @@ async function openEditRecordModal(id) {
       <label class="field"><span class="fieldLabel">Estado manual</span>
         <select id="e-status" class="input">
           <option value="">Automatico (calculado)</option>
+          <option value="puntual" ${r.statusOverride === "puntual" ? "selected" : ""}>Contar como puntual (ajuste admin)</option>
           <option value="justificado" ${r.statusOverride === "justificado" ? "selected" : ""}>Justificado</option>
         </select></label>
     </div>
-    <label class="field checkField"><input type="checkbox" id="e-justified" ${r.statusOverride === "justificado" ? "checked" : ""}> <span>Marcar como justificado</span></label>
+    <p class="modalNote"><strong>Contar como puntual</strong> conserva la hora que realmente quedó registrada, pero elimina la tardanza de las estadísticas. El motivo quedará en el historial.</p>
     <label class="field"><span class="fieldLabel">Nota administrativa</span><textarea id="e-notes" class="input" rows="2">${escapeHtml(r.adminNotes || "")}</textarea></label>
     <label class="field"><span class="fieldLabel">Motivo de la corrección (obligatorio)</span><textarea id="e-reason" class="input" rows="2" placeholder="Ej: ese día se autorizó ingreso diferente por reunión externa."></textarea></label>
+    <div id="e-feedback" class="formFeedback" role="alert" aria-live="assertive" hidden></div>
     <div class="modalActions">
       ${r.voided ? "" : `<button class="btnDanger" type="button" id="btn-void">Anular registro</button>`}
       <button class="btnGhost" type="button" id="btn-cancel-edit">Cancelar</button>
@@ -1990,17 +2003,39 @@ async function openEditRecordModal(id) {
   $("#btn-cancel-edit")?.addEventListener("click", closeModal);
   $("#btn-save-edit")?.addEventListener("click", async () => {
     const reason = $("#e-reason").value.trim();
-    if (!reason) { toast("Escribe el motivo de la corrección.", { kind: "warn" }); return; }
-    const justified = $("#e-justified").checked || $("#e-status").value === "justificado";
+    const feedback = $("#e-feedback");
+    if (!reason) {
+      feedback.textContent = "Escribe el motivo de la corrección para poder guardar.";
+      feedback.dataset.kind = "warn";
+      feedback.hidden = false;
+      $("#e-reason").classList.add("inputError");
+      $("#e-reason").focus();
+      return;
+    }
+    $("#e-reason").classList.remove("inputError");
+    feedback.hidden = true;
     const patch = {
       ingresoTime: $("#e-ingreso").value || "",
       salidaTime: $("#e-salida").value || "",
       modalidad: $("#e-modalidad").value,
       adminNotes: $("#e-notes").value.trim(),
-      statusOverride: justified ? "justificado" : ""
+      statusOverride: $("#e-status").value
     };
     if (!confirm("¿Confirmas guardar esta corrección del registro?")) return;
-    await saveRecordCorrection(id, patch, reason);
+    const saveButton = $("#btn-save-edit");
+    saveButton.disabled = true;
+    saveButton.textContent = "Guardando…";
+    feedback.textContent = "Guardando la corrección…";
+    feedback.dataset.kind = "info";
+    feedback.hidden = false;
+    const result = await saveRecordCorrection(id, patch, reason);
+    if (!result?.ok) {
+      saveButton.disabled = false;
+      saveButton.textContent = "Guardar corrección";
+      feedback.textContent = result?.message || "No se pudo guardar la corrección.";
+      feedback.dataset.kind = "warn";
+      feedback.hidden = false;
+    }
   });
   $("#btn-void")?.addEventListener("click", async () => {
     const reason = $("#e-reason").value.trim() || prompt("Motivo de anulacion:") || "";
@@ -2012,7 +2047,7 @@ async function openEditRecordModal(id) {
 
 async function saveRecordCorrection(id, patch, reason) {
   const r = findRecord(id);
-  if (!r) return;
+  if (!r) return { ok: false, message: "No se encontró el registro que intentas corregir." };
   try {
     const ref = doc(DB, COLLECTIONS.shiftRecords, id);
     const previousData = { ingresoTime: r.ingresoTime || "", salidaTime: r.salidaTime || "", modalidad: r.modalidad || "", statusOverride: r.statusOverride || "" };
@@ -2031,10 +2066,16 @@ async function saveRecordCorrection(id, patch, reason) {
     Object.assign(r, patch, { manualCorrection: true, correctionReason: reason, correctedBy: ACTIVE_EMAIL });
     toast("Registro corregido", { kind: "ok" });
     await closeModal();
-    applyRecordsFilter();
+    if (STATS_RECORDS.some((item) => item.id === id)) renderStatsUI();
+    else applyRecordsFilter();
+    return { ok: true };
   } catch (error) {
     console.error(error);
-    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la corrección.", { kind: "warn" });
+    const message = error?.code === "permission-denied"
+      ? "Firebase rechazó la corrección por permisos. Verifica que ingresaste con una cuenta administradora."
+      : "No se pudo guardar la corrección. Revisa tu conexión e inténtalo de nuevo.";
+    toast(message, { kind: "warn" });
+    return { ok: false, message };
   }
 }
 
@@ -2157,13 +2198,14 @@ function renderStatsUI() {
       <h3 class="sectionH">🕓 Detalle de tardanzas</h3>
       <p class="sectionSub">Cada llegada tarde del periodo: a qué hora debía llegar y a qué hora marcó.</p>
       ${stats.lateDetails.length ? `<div class="tableWrap"><table class="dataTable">
-        <thead><tr><th>Fecha</th><th>Miembro</th><th>Debía llegar</th><th>Marcó</th><th>Retraso</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Miembro</th><th>Debía llegar</th><th>Marcó</th><th>Retraso</th><th>Ajustar</th></tr></thead>
         <tbody>${stats.lateDetails.map((d) => `<tr>
           <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
           <td data-label="Miembro">${escapeHtml(d.name)}</td>
           <td data-label="Debía llegar">${escapeHtml(d.expectedStart)}</td>
           <td data-label="Marcó"><span class="badgeChip late">${escapeHtml(d.arrival)}</span></td>
           <td data-label="Retraso">${d.lateMinutes} min</td>
+          <td data-label="Ajustar"><button class="btnGhost btnCompact" type="button" data-fix-late="${escapeHtml(d.id)}">Corregir</button></td>
         </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">Sin llegadas tarde en el periodo. 🎉</div>`}
     </section>
 
@@ -2236,6 +2278,7 @@ function renderStatsUI() {
         </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay días con problemas en el periodo. 🎉</div>`}
     </section>
   `);
+  $$("[data-fix-late]").forEach((button) => button.addEventListener("click", () => openEditRecordModal(button.dataset.fixLate)));
   wireStatsControls();
   $("#btn-copy-summary").addEventListener("click", () => copyStatsSummary(stats, r));
   $("#btn-copy-report").addEventListener("click", () => copyStatsReport(stats, r, bestMembers));
