@@ -1,8 +1,8 @@
 ﻿/* Musicala Admin Hub
    - Login con Google (Firebase Auth)
-   - Hub administrativo + panel de jornadas, puntualidad y estadisticas
-   - Registro de jornada interno con lector QR + Firestore + marcacion remota
-   - Panel admin: estadisticas, horarios por miembro, excepciones y correccion de registros
+   - Hub administrativo + panel de jornadas, puntualidad y estadísticas
+   - Registro de jornada interno con lector QR + Firestore + marcación remota
+   - Panel admin: estadísticas, horarios por miembro, excepciones y corrección de registros
 
    Estructura general:
    1. Config y constantes
@@ -10,8 +10,8 @@
    3. Modelo de datos (roles, member settings, overrides, calculo de puntualidad)
    4. Service Worker / PWA / install
    5. Navegacion tipo panel (tabs)
-   6. Vistas: Inicio, Marcar jornada, Registros, Estadisticas, Configuracion, Equipo
-   7. Modales: detalle de registro, edicion/correccion, excepciones, horario
+   6. Vistas: Inicio, Marcar jornada, Registros, Estadísticas, Configuración, Equipo
+   7. Modales: detalle de registro, edicion/corrección, excepciones, horario
    8. Auth + mount
 */
 
@@ -27,7 +27,7 @@ const firebaseConfig = {
   appId: "1:468927778540:web:619daeb67ff0287d92dfc9"
 };
 
-/* Administradores: pueden ver estadisticas globales, configurar horarios y corregir registros. */
+/* Administradores: pueden ver estadísticas globales, configurar horarios y corregir registros. */
 const ADMIN_EMAILS = [
   "alekcaballeromusic@gmail.com",
   "catalina.medina.leal@gmail.com"
@@ -62,7 +62,7 @@ const HUB = {
       }
     }
   },
-  // Accesos rapidos (links externos) que se muestran en el Inicio.
+  // Accesos rápidos (links externos) que se muestran en el Inicio.
   QUICK_LINKS: [
     { id: "nomina", icon: "💰", title: "Novedades nomina", subtitle: "General" },
     { id: "apertura", icon: "🔑", title: "Protocolo de apertura", subtitle: "General" },
@@ -106,17 +106,17 @@ const USER_RESOURCE_LINKS = {
   }
 };
 
-/* Dias de la semana (clave Firestore + etiqueta). Orden lun -> dom. */
+/* Días de la semana (clave Firestore + etiqueta). Orden lun -> dom. */
 const WEEK_DAYS = [
   { key: "monday", label: "Lunes", short: "Lun" },
   { key: "tuesday", label: "Martes", short: "Mar" },
-  { key: "wednesday", label: "Miercoles", short: "Mie" },
+  { key: "wednesday", label: "Miércoles", short: "Mié" },
   { key: "thursday", label: "Jueves", short: "Jue" },
   { key: "friday", label: "Viernes", short: "Vie" },
-  { key: "saturday", label: "Sabado", short: "Sab" },
+  { key: "saturday", label: "Sábado", short: "Sáb" },
   { key: "sunday", label: "Domingo", short: "Dom" }
 ];
-// getUTCDay(): 0=domingo .. 6=sabado
+// getUTCDay(): 0=domingo .. 6=sábado
 const WEEKDAY_INDEX_TO_KEY = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const MONTH_NAMES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -260,7 +260,7 @@ function safeEmailId(email) {
 }
 
 function prettyName(user, fallbackEmail = "") {
-  return user?.displayName || fallbackEmail || "Sesion activa";
+  return user?.displayName || fallbackEmail || "Sesión activa";
 }
 
 function getUserResourceLinks(email, profile) {
@@ -303,7 +303,7 @@ function canCurrentUserMarkRemote() {
 }
 
 function remoteNotAllowedMessage() {
-  return "La marcacion desde casa no esta habilitada para tu usuario. Por favor marca tu ingreso en la sede con el codigo QR.";
+  return "La marcación desde casa no está habilitada para tu usuario. Por favor marca tu ingreso en la sede con el código QR.";
 }
 
 /* ---- Fechas / zona horaria America/Bogota ---- */
@@ -523,11 +523,11 @@ function getScheduleOverride(email, date) {
   return SCHEDULE_OVERRIDES[`${email}__${date}`] || null;
 }
 
-/* Prioridad: excepcion por fecha -> horario semanal -> sin horario (null). */
+/* Prioridad: excepción por fecha -> horario semanal -> sin horario (null). */
 function getExpectedScheduleForDate(email, date) {
   const override = getScheduleOverride(email, date);
   if (override) {
-    if (override.enabled === false) return null; // dia libre por excepcion
+    if (override.enabled === false) return null; // día libre por excepción
     return {
       source: "override",
       start: override.start, end: override.end,
@@ -582,7 +582,7 @@ function calculateShiftStatus(record, schedule) {
     if (wi != null && ws != null) out.workedMinutes = Math.max(0, ws - wi);
   }
 
-  // Sin horario configurado para ese dia
+  // Sin horario configurado para ese día
   if (!schedule) {
     if (hasIngreso) { out.status = "extra"; out.label = "Fuera de horario"; out.isExtra = true; }
     else { out.status = "sin-horario"; out.label = "Sin horario"; }
@@ -630,7 +630,7 @@ function finalizeStatus(out, record) {
   return out;
 }
 
-/* Agrega estadisticas para un rango de fechas. */
+/* Agrega estadísticas para un rango de fechas. */
 function calculateStats(records, range) {
   const { from, to, memberFilter = "all", modalityFilter = "all", statusFilter = "all" } = range;
   const days = datesInRange(from, to);
@@ -844,7 +844,7 @@ async function registerServiceWorker() {
     });
     requestUpdate();
   } catch (error) {
-    console.warn("No se pudo preparar la app para uso sin conexion", error);
+    console.warn("No se pudo preparar la app para uso sin conexión", error);
   }
 }
 
@@ -883,7 +883,7 @@ function setupInstallPrompt() {
   });
   const onInstallClick = async () => {
     if (isIOS() && !__deferredInstallPrompt) { toast("En iPhone/iPad: Compartir > Agregar a pantalla de inicio"); return; }
-    if (!__deferredInstallPrompt) { toast("Instalacion no disponible todavia"); return; }
+    if (!__deferredInstallPrompt) { toast("Instalación no disponible todavía"); return; }
     __deferredInstallPrompt.prompt();
     await __deferredInstallPrompt.userChoice.catch(() => null);
     __deferredInstallPrompt = null;
@@ -925,7 +925,7 @@ function renderNav() {
 
 async function goTab(tab) {
   const def = TABS.find((t) => t.id === tab);
-  if (def?.admin && !isCurrentUserAdmin()) { toast("No tienes permisos para esta seccion.", { kind: "warn" }); return; }
+  if (def?.admin && !isCurrentUserAdmin()) { toast("No tienes permisos para esta sección.", { kind: "warn" }); return; }
   if (def?.memberOnly && isCurrentUserAdmin()) { tab = "inicio"; }
   CURRENT_TAB = tab;
   renderNav();
@@ -1009,7 +1009,7 @@ function renderMemberDashboard(records, date) {
         </div>
         <div class="todayMeta">
           ${schedule
-            ? `<span>Hora esperada de ingreso: <strong>${escapeHtml(schedule.start)}</strong> · ${escapeHtml(schedule.modality)}${schedule.source === "override" ? " · excepcion" : ""}</span>`
+            ? `<span>Hora esperada de ingreso: <strong>${escapeHtml(schedule.start)}</strong> · ${escapeHtml(schedule.modality)}${schedule.source === "override" ? " · excepción" : ""}</span>`
             : `<span>Hoy no tienes un horario configurado.</span>`}
         </div>
         <div class="todayActions">
@@ -1024,7 +1024,7 @@ function renderMemberDashboard(records, date) {
       ${recent.length ? `<div class="miniList">${recent.map((r) => {
         const c = calculateShiftStatus(r, getExpectedScheduleForDate(ACTIVE_EMAIL, r.date));
         return `<div class="miniRow"><span class="miniDate">${escapeHtml(r.date)}</span><span>${escapeHtml(r.ingresoTime || "—")} – ${escapeHtml(r.salidaTime || "—")}</span>${statusBadge(c)}</div>`;
-      }).join("")}</div>` : `<div class="emptyState">Aun no tienes registros recientes.</div>`}
+      }).join("")}</div>` : `<div class="emptyState">Aún no tienes registros recientes.</div>`}
     </section>
 
     ${renderQuickLinksSection()}
@@ -1061,7 +1061,7 @@ function renderAdminDashboard(records, date) {
         <h2 class="dashTitle">Panel del equipo</h2>
         <p class="dashSub">Resumen de jornadas de hoy en tiempo real.</p>
       </div>
-      <button class="btnGhost btnSmall" type="button" data-go="stats">Ver estadisticas →</button>
+      <button class="btnGhost btnSmall" type="button" data-go="stats">Ver estadísticas →</button>
     </section>
 
     <section class="kpiGrid">
@@ -1289,14 +1289,14 @@ async function renderAnnualCalendarTab() {
       </div>
       <div class="headActions">
         ${isCurrentUserAdmin() ? `<label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="cal-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === activeMember.email ? "selected" : ""}>${escapeHtml(m.name)}${isAdminEmail(m.email) ? " (admin)" : ""}</option>`).join("")}</select></label>` : ""}
-        <label class="field inlineField"><span class="fieldLabel">Anio</span><input type="number" id="cal-year" class="input" min="2024" max="2035" value="${CALENDAR_YEAR}"></label>
+        <label class="field inlineField"><span class="fieldLabel">Año</span><input type="number" id="cal-year" class="input" min="2024" max="2035" value="${CALENDAR_YEAR}"></label>
       </div>
     </section>
 
     <section class="kpiGrid wide">
       ${kpiCard("Horas efectivas", minutesToHhmm(stats.effectiveMinutes), "almuerzo ya descontado", "info")}
-      ${kpiCard("Dias con jornada", stats.workDays, "en el anio seleccionado", "ok")}
-      ${kpiCard("Dias sin jornada", stats.freeDays, "incluye descansos y festivos", "")}
+      ${kpiCard("Días con jornada", stats.workDays, "en el año seleccionado", "ok")}
+      ${kpiCard("Días sin jornada", stats.freeDays, "incluye descansos y festivos", "")}
       ${kpiCard("Con almuerzo", stats.lunchDays, "jornadas mayores a 6h", "warn")}
       ${kpiCard("Excepciones", stats.overrideDays, "cambios por fecha", stats.overrideDays ? "info" : "")}
     </section>
@@ -1304,7 +1304,7 @@ async function renderAnnualCalendarTab() {
     <section class="annualLegend">
       <span class="legendChip work">Con jornada</span>
       <span class="legendChip free">Sin jornada</span>
-      <span class="legendChip override">Excepcion</span>
+      <span class="legendChip override">Excepción</span>
     </section>
 
     <section class="monthNav">
@@ -1340,7 +1340,7 @@ function openCalendarDayDetail(email, date) {
   const schedule = dayData.schedule;
   const name = getProfileName(email);
   if (!schedule) {
-    openModal("Sin jornada", `${name} · ${date}`, "Horario anual", `<p class="modalNote">${escapeHtml(dayData.label || "Este dia no tiene jornada configurada para este trabajador.")}</p>`);
+    openModal("Sin jornada", `${name} · ${date}`, "Horario anual", `<p class="modalNote">${escapeHtml(dayData.label || "Este día no tiene jornada configurada para este trabajador.")}</p>`);
     return;
   }
   const rawMinutes = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
@@ -1350,11 +1350,11 @@ function openCalendarDayDetail(email, date) {
       ${detailItem("Salida", schedule.end)}
       ${detailItem("Horas efectivas", minutesToHhmm(effectiveShiftMinutes(schedule)))}
       ${detailItem("Modalidad", schedule.modality || "sede")}
-      ${detailItem("Fuente", schedule.source === "override" ? "Excepcion por fecha" : "Horario semanal")}
+      ${detailItem("Fuente", schedule.source === "override" ? "Excepción por fecha" : "Horario semanal")}
       ${detailItem("Almuerzo", rawMinutes > 360 ? "Descuenta 1h" : "No descuenta")}
     </div>
     ${(schedule.reason || schedule.notes) ? `<p class="noteBox">${escapeHtml(schedule.reason || schedule.notes)}</p>` : ""}
-    ${isCurrentUserAdmin() ? `<div class="modalActions"><button class="btnPrimary" type="button" id="btn-edit-day-schedule">Editar este dia</button></div>` : ""}
+    ${isCurrentUserAdmin() ? `<div class="modalActions"><button class="btnPrimary" type="button" id="btn-edit-day-schedule">Editar este día</button></div>` : ""}
   `);
   $("#btn-edit-day-schedule")?.addEventListener("click", () => openOverrideModalV2(email, getScheduleOverride(email, date) || { date, ...schedule, enabled: true }));
 }
@@ -1364,7 +1364,7 @@ function renderQuickLinksSection() {
   if (!items.length) return "";
   return `
     <section class="dashSection">
-      <h3 class="sectionH">Accesos rapidos</h3>
+      <h3 class="sectionH">Accesos rápidos</h3>
       <div class="linkGrid">
         ${items.map((q) => `
           <button class="linkTile" type="button" data-link="${escapeHtml(q.id)}">
@@ -1383,13 +1383,13 @@ function wireGoButtons() {
 function openExternalLink(id) {
   if (id === "horario") { goTab("calendario"); return; }
   const url = String(ACTIVE_LINKS[id] || "").trim();
-  if (!url) { toast("Este acceso aun no tiene link configurado."); return; }
+  if (!url) { toast("Este acceso aún no tiene link configurado."); return; }
   const safeUrl = /^(https?:)?\/\//i.test(url) ? url : `https://${url}`;
   window.open(safeUrl, "_blank", "noopener,noreferrer");
 }
 
 /* ==========================================================================
-   6b. Vista: Marcar jornada (QR + remoto) — conserva la logica original
+   6b. Vista: Marcar jornada (QR + remoto) — conserva la lógica original
 ========================================================================== */
 async function renderShiftTab() {
   await loadAdminData().catch(() => {});
@@ -1440,7 +1440,7 @@ function wireShiftModeControls() {
 }
 
 function insecureContextMsg() {
-  return !window.isSecureContext ? "La camara necesita HTTPS o localhost. En GitHub Pages funciona con HTTPS." : "";
+  return !window.isSecureContext ? "La cámara necesita HTTPS o localhost. En GitHub Pages funciona con HTTPS." : "";
 }
 
 function renderOnSiteShiftView() {
@@ -1455,18 +1455,18 @@ function renderOnSiteShiftView() {
         </div>
       </div>
       <div class="qrControls">
-        <label class="field"><span class="fieldLabel">Camara</span><select id="cameraSelect" class="input"></select></label>
+        <label class="field"><span class="fieldLabel">Cámara</span><select id="cameraSelect" class="input"></select></label>
         <button id="btnPerms" class="btnGhost" type="button">Permitir/Actualizar</button>
         <button id="btnFlip" class="btnGhost" type="button">Voltear</button>
       </div>
       <div class="qrActions">
-        <button id="btnStart" class="btnPrimary" type="button">Iniciar camara</button>
+        <button id="btnStart" class="btnPrimary" type="button">Iniciar cámara</button>
         <button id="btnStop" class="btnGhost" type="button" disabled>Detener</button>
       </div>
       <div id="reader" class="reader"></div>
       <div class="resultPanel">
-        <div class="panelTitle">Ultimo resultado</div>
-        <div id="shift-result" class="result">Apunta la camara al codigo QR de la sede.</div>
+        <div class="panelTitle">Último resultado</div>
+        <div id="shift-result" class="result">Apunta la cámara al código QR de la sede.</div>
       </div>
     </section>
   `;
@@ -1502,9 +1502,9 @@ function renderRemoteShiftView() {
 function friendlySaveError(error) {
   if (error?.message === "cancelled") return "No se reemplazo el registro existente.";
   if (error?.message === "remote_not_allowed") return remoteNotAllowedMessage();
-  if (error?.code === "permission-denied") return `No se pudo guardar por permisos de Firestore. Sesion actual: ${ACTIVE_EMAIL || "sin correo"}. Si el problema sigue, avisa este correo al admin.`;
-  if (error?.code === "unavailable" || error?.code === "deadline-exceeded") return "No se pudo guardar por conexion inestable. Intenta de nuevo cuando el celular tenga buena señal.";
-  return "No se pudo guardar tu marcacion. Revisa tu conexion e intenta de nuevo.";
+  if (error?.code === "permission-denied") return `No se pudo guardar por permisos de Firestore. Sesión actual: ${ACTIVE_EMAIL || "sin correo"}. Si el problema sigue, avisa este correo al admin.`;
+  if (error?.code === "unavailable" || error?.code === "deadline-exceeded") return "No se pudo guardar por conexión inestable. Intenta de nuevo cuando el celular tenga buena señal.";
+  return "No se pudo guardar tu marcación. Revisa tu conexión e intenta de nuevo.";
 }
 
 async function markRemoteShift(type) {
@@ -1517,7 +1517,7 @@ async function markRemoteShift(type) {
   try {
     const now = new Date();
     const parts = getBogotaParts(now);
-    if (result) result.textContent = "Guardando tu marcacion...";
+    if (result) result.textContent = "Guardando tu marcación...";
     await saveShiftRecord({ type, raw: "REMOTE_MANUAL", mode: "remoto", source: "manual_remote", date: parts.date, time: parts.time, stamp: now.toISOString() });
     if (result) result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} remoto registrado: ${parts.date} ${parts.time}`;
     toast("Jornada remota registrada", { kind: "ok" });
@@ -1532,10 +1532,10 @@ async function markRemoteShift(type) {
 async function listVideoInputs() {
   if (window.Html5Qrcode?.getCameras) {
     const cams = await window.Html5Qrcode.getCameras();
-    return cams.map((cam) => ({ id: cam.id || cam.deviceId, label: cam.label || "Camara" }));
+    return cams.map((cam) => ({ id: cam.id || cam.deviceId, label: cam.label || "Cámara" }));
   }
   const devices = await navigator.mediaDevices.enumerateDevices();
-  return devices.filter((d) => d.kind === "videoinput").map((d) => ({ id: d.deviceId, label: d.label || "Camara" }));
+  return devices.filter((d) => d.kind === "videoinput").map((d) => ({ id: d.deviceId, label: d.label || "Cámara" }));
 }
 function pickBestCameraId(devices) {
   const rear = devices.find((d) => /back|trasera|rear|environment/i.test(d.label || ""));
@@ -1550,7 +1550,7 @@ async function populateCameras() {
   if (!devices.length) { if (result) result.textContent = insecureContextMsg() || "No se detectaron camaras. Revisa permisos."; return; }
   for (const [index, device] of devices.entries()) {
     const opt = document.createElement("option");
-    opt.value = device.id; opt.textContent = device.label || `Camara ${index + 1}`;
+    opt.value = device.id; opt.textContent = device.label || `Cámara ${index + 1}`;
     select.appendChild(opt);
   }
   currentCameraId = currentCameraId && devices.some((d) => d.id === currentCameraId) ? currentCameraId : pickBestCameraId(devices);
@@ -1562,7 +1562,7 @@ async function requestPermissionsAndRefresh() {
     stream.getTracks().forEach((track) => track.stop());
   } catch (_) {
     const result = $("#shift-result");
-    if (result) result.textContent = insecureContextMsg() || "Concede permiso a la camara en el navegador.";
+    if (result) result.textContent = insecureContextMsg() || "Concede permiso a la cámara en el navegador.";
   } finally { await populateCameras(); }
 }
 function wireShiftControls() {
@@ -1572,7 +1572,7 @@ function wireShiftControls() {
   $("#btnStop")?.addEventListener("click", stopQrScanner);
   $("#btnFlip")?.addEventListener("click", async () => {
     const options = $$("#cameraSelect option").map((opt) => opt.value);
-    if (options.length < 2) { $("#shift-result").textContent = "No encontramos otra camara disponible en este dispositivo."; return; }
+    if (options.length < 2) { $("#shift-result").textContent = "No encontramos otra cámara disponible en este dispositivo."; return; }
     const nextId = options[(options.indexOf(currentCameraId) + 1) % options.length];
     currentCameraId = nextId; $("#cameraSelect").value = nextId;
     if (qrReader?.isScanning) { await stopQrScanner(); await startQrScanner(); }
@@ -1592,7 +1592,7 @@ function detectShiftType(rawText) {
 
 async function startQrScanner() {
   const result = $("#shift-result");
-  if (!window.Html5Qrcode) { result.textContent = "No se pudo abrir el lector de QR. Revisa tu conexion a internet e intenta de nuevo."; return; }
+  if (!window.Html5Qrcode) { result.textContent = "No se pudo abrir el lector de QR. Revisa tu conexión a internet e intenta de nuevo."; return; }
   try {
     if (!currentCameraId) await populateCameras();
     if (qrReader) await qrReader.stop().catch(() => null);
@@ -1601,10 +1601,10 @@ async function startQrScanner() {
     try { await qrReader.start({ deviceId: { exact: currentCameraId } }, cfg, onScanSuccess, () => {}); }
     catch (_) { await qrReader.start({ facingMode: "environment" }, cfg, onScanSuccess, () => {}); }
     $("#btnStart").disabled = true; $("#btnStop").disabled = false;
-    result.textContent = "Camara activa. Acerca el codigo QR al recuadro.";
+    result.textContent = "Cámara activa. Acerca el código QR al recuadro.";
   } catch (error) {
     console.error(error);
-    result.textContent = insecureContextMsg() || "No pudimos abrir la camara. Revisa el permiso de camara o cierra otras apps que la esten usando.";
+    result.textContent = insecureContextMsg() || "No pudimos abrir la cámara. Revisa el permiso de cámara o cierra otras apps que la esten usando.";
   }
 }
 async function stopQrScanner() {
@@ -1623,14 +1623,14 @@ async function onScanSuccess(decodedText) {
     navigator.vibrate?.(20);
     qrReader?.pause?.(true);
     const type = detectShiftType(decodedText);
-    if (!type) { result.textContent = "Este codigo QR no corresponde a la marcacion de jornada. Por favor usa el QR de entrada o salida de la sede."; return; }
+    if (!type) { result.textContent = "Este código QR no corresponde a la marcación de jornada. Por favor usa el QR de entrada o salida de la sede."; return; }
     const now = new Date();
     const parts = getBogotaParts(now);
-    if ((Date.now() - lastQrSaveOkAt) / 1000 < 8) { result.textContent = "Ya acabamos de guardar una marcacion. Espera unos segundos antes de escanear otra vez."; return; }
+    if ((Date.now() - lastQrSaveOkAt) / 1000 < 8) { result.textContent = "Ya acabamos de guardar una marcación. Espera unos segundos antes de escanear otra vez."; return; }
     result.textContent = `Registrando ${type === "ingreso" ? "tu ingreso" : "tu salida"}...`;
     await saveShiftRecord({ type, raw: decodedText, mode: "presencial", source: "qr", date: parts.date, time: parts.time, stamp: now.toISOString() });
     savedOk = true; lastQrSaveOkAt = Date.now();
-    result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} registrado: ${parts.date} ${parts.time}. Camara detenida para evitar registros duplicados.`;
+    result.textContent = `${type === "ingreso" ? "Ingreso" : "Salida"} registrado: ${parts.date} ${parts.time}. Cámara detenida para evitar registros duplicados.`;
     toast("Jornada registrada", { kind: "ok" });
     await stopQrScanner();
     await renderTodaySummary();
@@ -1693,7 +1693,7 @@ async function sendIngresoEmailNotification(event) {
       method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(event), keepalive: true
     });
-  } catch (error) { console.warn("No se pudo enviar la notificacion de ingreso por correo", error); }
+  } catch (error) { console.warn("No se pudo enviar la notificación de ingreso por correo", error); }
 }
 
 async function renderTodaySummary() {
@@ -1737,7 +1737,7 @@ async function renderRecordsTab() {
       <div>
         <p class="dashEyebrow">Consulta</p>
         <h2 class="dashTitle">Registros de jornada</h2>
-        <p class="dashSub">Filtra, revisa el estado calculado y abre el detalle de cada marcacion.</p>
+        <p class="dashSub">Filtra, revisa el estado calculado y abre el detalle de cada marcación.</p>
       </div>
       <button class="btnGhost btnSmall" type="button" id="btn-export-csv">Exportar CSV</button>
     </section>
@@ -1793,7 +1793,7 @@ async function reloadRecords() {
     RECORDS_CACHE = await getShiftRecords({ mineOnly: RECORDS_FILTER.scope === "mine" || !isCurrentUserAdmin(), max: 300 });
   } catch (error) {
     console.error(error);
-    if (host) host.innerHTML = `<div class="emptyState">No se pudieron cargar los registros. Revisa tu conexion e intenta de nuevo.</div>`;
+    if (host) host.innerHTML = `<div class="emptyState">No se pudieron cargar los registros. Revisa tu conexión e intenta de nuevo.</div>`;
     return;
   }
   applyRecordsFilter();
@@ -1819,7 +1819,7 @@ function applyRecordsFilter() {
   if (!host) return;
   const admin = isCurrentUserAdmin();
   const records = filteredRecords();
-  if (!records.length) { host.innerHTML = `<div class="emptyState">Aun no hay registros para este filtro.</div>`; return; }
+  if (!records.length) { host.innerHTML = `<div class="emptyState">Aún no hay registros para este filtro.</div>`; return; }
   host.innerHTML = `
     <div class="tableWrap">
       <table class="dataTable">
@@ -1923,7 +1923,7 @@ function findRecord(id) { return RECORDS_CACHE.find((r) => r.id === id); }
 
 async function openRecordDetail(id) {
   const r = findRecord(id);
-  if (!r) { toast("No se encontro el registro."); return; }
+  if (!r) { toast("No se encontró el registro."); return; }
   const schedule = getExpectedScheduleForDate(r.email, r.date);
   const calc = calculateShiftStatus(r, schedule);
   const history = Array.isArray(r.correctionHistory) ? r.correctionHistory : [];
@@ -1935,7 +1935,7 @@ async function openRecordDetail(id) {
       ${detailItem("Salida", r.salidaTime || "—")}
       ${detailItem("Modalidad", r.modalidad || "—")}
       ${detailItem("Fuente ingreso", sourceLabel(r.ingresoSource))}
-      ${detailItem("Hora esperada", schedule ? `${schedule.start} – ${schedule.end} (${schedule.modality})${schedule.source === "override" ? " · excepcion" : ""}` : "Sin horario")}
+      ${detailItem("Hora esperada", schedule ? `${schedule.start} – ${schedule.end} (${schedule.modality})${schedule.source === "override" ? " · excepción" : ""}` : "Sin horario")}
       ${detailItem("Minutos tarde", calc.lateMinutes)}
       ${detailItem("Trabajado", minutesToHhmm(calc.workedMinutes))}
       ${detailItem("Esperado", minutesToHhmm(calc.expectedMinutes))}
@@ -1962,13 +1962,13 @@ function detailItem(label, value) {
 async function openEditRecordModal(id) {
   if (!isCurrentUserAdmin()) { toast("No tienes permisos para editar registros.", { kind: "warn" }); return; }
   const r = findRecord(id);
-  if (!r) { toast("No se encontro el registro."); return; }
-  openModal("Editar / corregir registro", `${r.name} · ${r.date}`, "Correccion admin", `
-    <p class="modalNote">Editar este registro <strong>no cambia</strong> el horario semanal de la persona. Solo corrige esta marcacion puntual.</p>
+  if (!r) { toast("No se encontró el registro."); return; }
+  openModal("Editar / corregir registro", `${r.name} · ${r.date}`, "Corrección admin", `
+    <p class="modalNote">Editar este registro <strong>no cambia</strong> el horario semanal de la persona. Solo corrige esta marcación puntual.</p>
     <div class="formGrid">
       <label class="field"><span class="fieldLabel">Hora de ingreso (HH:mm)</span><input type="time" id="e-ingreso" class="input" value="${escapeHtml(r.ingresoTime || "")}"></label>
       <label class="field"><span class="fieldLabel">Hora de salida (HH:mm)</span><input type="time" id="e-salida" class="input" value="${escapeHtml(r.salidaTime || "")}"></label>
-      <label class="field"><span class="fieldLabel">Modalidad del dia</span>
+      <label class="field"><span class="fieldLabel">Modalidad del día</span>
         <select id="e-modalidad" class="input">
           ${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${(r.modalidad || "sede") === m ? "selected" : ""}>${m}</option>`).join("")}
         </select></label>
@@ -1980,17 +1980,17 @@ async function openEditRecordModal(id) {
     </div>
     <label class="field checkField"><input type="checkbox" id="e-justified" ${r.statusOverride === "justificado" ? "checked" : ""}> <span>Marcar como justificado</span></label>
     <label class="field"><span class="fieldLabel">Nota administrativa</span><textarea id="e-notes" class="input" rows="2">${escapeHtml(r.adminNotes || "")}</textarea></label>
-    <label class="field"><span class="fieldLabel">Motivo de la correccion (obligatorio)</span><textarea id="e-reason" class="input" rows="2" placeholder="Ej: ese dia se autorizo ingreso diferente por reunion externa."></textarea></label>
+    <label class="field"><span class="fieldLabel">Motivo de la corrección (obligatorio)</span><textarea id="e-reason" class="input" rows="2" placeholder="Ej: ese día se autorizó ingreso diferente por reunión externa."></textarea></label>
     <div class="modalActions">
       ${r.voided ? "" : `<button class="btnDanger" type="button" id="btn-void">Anular registro</button>`}
       <button class="btnGhost" type="button" id="btn-cancel-edit">Cancelar</button>
-      <button class="btnPrimary" type="button" id="btn-save-edit">Guardar correccion</button>
+      <button class="btnPrimary" type="button" id="btn-save-edit">Guardar corrección</button>
     </div>
   `);
   $("#btn-cancel-edit")?.addEventListener("click", closeModal);
   $("#btn-save-edit")?.addEventListener("click", async () => {
     const reason = $("#e-reason").value.trim();
-    if (!reason) { toast("Escribe el motivo de la correccion.", { kind: "warn" }); return; }
+    if (!reason) { toast("Escribe el motivo de la corrección.", { kind: "warn" }); return; }
     const justified = $("#e-justified").checked || $("#e-status").value === "justificado";
     const patch = {
       ingresoTime: $("#e-ingreso").value || "",
@@ -1999,7 +1999,7 @@ async function openEditRecordModal(id) {
       adminNotes: $("#e-notes").value.trim(),
       statusOverride: justified ? "justificado" : ""
     };
-    if (!confirm("¿Confirmas guardar esta correccion del registro?")) return;
+    if (!confirm("¿Confirmas guardar esta corrección del registro?")) return;
     await saveRecordCorrection(id, patch, reason);
   });
   $("#btn-void")?.addEventListener("click", async () => {
@@ -2034,7 +2034,7 @@ async function saveRecordCorrection(id, patch, reason) {
     applyRecordsFilter();
   } catch (error) {
     console.error(error);
-    toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar la correccion.", { kind: "warn" });
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la corrección.", { kind: "warn" });
   }
 }
 
@@ -2058,7 +2058,7 @@ async function voidRecord(id, reason) {
 }
 
 /* ==========================================================================
-   6d. Vista: Estadisticas (admin)
+   6d. Vista: Estadísticas (admin)
 ========================================================================== */
 const STATS_FILTER = { preset: "month", from: "", to: "", member: "all", modality: "all", status: "all" };
 
@@ -2074,8 +2074,8 @@ function presetRange(preset) {
 }
 
 async function renderAdminStats() {
-  if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
-  setPanel(`<div class="loadingBlock">Cargando estadisticas…</div>`);
+  if (!isCurrentUserAdmin()) { toast("Sección solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
+  setPanel(`<div class="loadingBlock">Cargando estadísticas…</div>`);
   await loadAdminData({ force: true }).catch(() => {});
   let records = [];
   try { records = await getShiftRecords({ mineOnly: false, max: 1000 }); } catch (_) {}
@@ -2129,7 +2129,7 @@ function renderStatsUI() {
       ${kpiCard("Puntualidad global", g.punctualityPct + "%", `${g.onTime} puntuales / ${g.late} tarde`, g.punctualityPct >= 80 ? "ok" : "warn")}
       ${kpiCard("Jornadas esperadas", g.expectedDays, `${g.registeredDays} registradas (${g.attendancePct}%)`, "")}
       ${kpiCard("Llegadas tarde", g.late, `prom. ${g.avgLateMinutes} min`, g.late ? "late" : "ok")}
-      ${kpiCard("Ausencias", g.absent, "segun horario", g.absent ? "absent" : "ok")}
+      ${kpiCard("Ausencias", g.absent, "según horario", g.absent ? "absent" : "ok")}
       ${kpiCard("Jornadas incompletas", g.incompleteDays, "sin salida", g.incompleteDays ? "warn" : "ok")}
       ${kpiCard("Horas trabajadas", minutesToHhmm(g.totalWorkedMinutes), "registradas", "")}
       ${kpiCard("Horas programadas", minutesToHhmm(g.totalExpectedMinutes), `${g.expectedDays} jornadas`, "info")}
@@ -2148,7 +2148,7 @@ function renderStatsUI() {
         ${bestMembers.length ? `<div class="rankList">${bestMembers.slice(0, 5).map((m, i) => rankRow(i + 1, m.name, m.punctualityPct + "%", barHtml(m.punctualityPct, "ok"))).join("")}</div>` : `<div class="emptyState">Sin datos suficientes.</div>`}
       </section>
       <section class="dashSection card">
-        <h3 class="sectionH">⏰ Mas llegadas tarde</h3>
+        <h3 class="sectionH">⏰ Más llegadas tarde</h3>
         ${worstByLate.length ? `<div class="rankList">${worstByLate.slice(0, 5).map((m, i) => rankRow(i + 1, m.name, m.late + " tarde", barHtml(maxPct(m.late, worstByLate[0].late), "late"))).join("")}</div>` : `<div class="emptyState">Sin llegadas tarde en el periodo. 👌</div>`}
       </section>
     </div>
@@ -2226,14 +2226,14 @@ function renderStatsUI() {
     </section>
 
     <section class="dashSection">
-      <h3 class="sectionH">📅 Dias con mas problemas de puntualidad</h3>
+      <h3 class="sectionH">📅 Días con más problemas de puntualidad</h3>
       ${worstDays.length ? `<div class="tableWrap"><table class="dataTable">
         <thead><tr><th>Fecha</th><th>Esperados</th><th>Puntuales</th><th>Tarde</th><th>Ausentes</th><th>Incompletos</th></tr></thead>
         <tbody>${worstDays.map((d) => `<tr>
           <td data-label="Fecha">${escapeHtml(d.date)}</td><td data-label="Esperados">${d.expected}</td>
           <td data-label="Puntuales">${d.onTime}</td><td data-label="Tarde"><span class="badgeChip ${d.late ? "late" : "ok"}">${d.late}</span></td>
           <td data-label="Ausentes"><span class="badgeChip ${d.absent ? "absent" : "ok"}">${d.absent}</span></td><td data-label="Incompletos">${d.incomplete}</td>
-        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay dias con problemas en el periodo. 🎉</div>`}
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay días con problemas en el periodo. 🎉</div>`}
     </section>
   `);
   wireStatsControls();
@@ -2267,7 +2267,7 @@ function wireStatsControls() {
 
 async function copyText(text, okMsg) {
   try { await navigator.clipboard.writeText(text); toast(okMsg || "Copiado", { kind: "ok" }); }
-  catch (_) { toast("No se pudo copiar automaticamente."); }
+  catch (_) { toast("No se pudo copiar automáticamente."); }
 }
 function copyStatsSummary(stats, r) {
   const g = stats.global;
@@ -2290,11 +2290,11 @@ function copyStatsReport(stats, r, best) {
 }
 
 /* ==========================================================================
-   6e. Vista: Configuracion (horarios por miembro) — admin
+   6e. Vista: Configuración (horarios por miembro) — admin
 ========================================================================== */
 async function renderConfigTab() {
-  if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
-  setPanel(`<div class="loadingBlock">Cargando configuracion…</div>`);
+  if (!isCurrentUserAdmin()) { toast("Sección solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
+  setPanel(`<div class="loadingBlock">Cargando configuración…</div>`);
   await loadAdminData({ force: true }).catch(() => {});
   const members = statsMemberList();
   CONFIG_EMAIL = CONFIG_EMAIL && members.some((m) => m.email === CONFIG_EMAIL) ? CONFIG_EMAIL : (members[0]?.email || "");
@@ -2311,7 +2311,7 @@ async function renderConfigTab() {
         <select id="cfg-member" class="input">
           ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
         </select></label>
-      <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepcion / cambio de horario</button>
+      <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepción / cambio de horario</button>
     </section>
     <div id="cfg-body"></div>
   `);
@@ -2402,7 +2402,7 @@ function renderMemberSettings() {
         <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Modalidad</th><th>Motivo</th><th>Acciones</th></tr></thead>
         <tbody>${overrides.map((o) => `<tr class="${o.date === today ? "rowToday" : (o.date >= weekStart && o.date <= weekEnd ? "rowWeek" : "")}">
           <td data-label="Fecha">${escapeHtml(o.date)}${o.date === today ? ` <span class="badgeChip info">Hoy</span>` : ""}</td>
-          <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Dia libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
+          <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Día libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
           <td data-label="Horario">${o.enabled === false ? "—" : `${escapeHtml(o.start || "")} – ${escapeHtml(o.end || "")}`}</td>
           <td data-label="Modalidad">${escapeHtml(o.modality || "—")}</td>
           <td data-label="Motivo">${escapeHtml(o.reason || "")}</td>
@@ -2460,11 +2460,11 @@ async function saveMemberSettings() {
   try {
     await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
     MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings(payload);
-    toast("Configuracion guardada", { kind: "ok" });
+    toast("Configuración guardada", { kind: "ok" });
     renderMemberSettings();
   } catch (error) {
     console.error(error);
-    toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar la configuracion.", { kind: "warn" });
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la configuración.", { kind: "warn" });
   }
 }
 
@@ -2474,18 +2474,18 @@ function openOverrideModalV2(email, existingOverride = null) {
   const initialDate = existingOverride?.date || todayBogota();
   const initialEnabled = existingOverride?.enabled !== false;
   const initialWeekday = weekdayKeyForDate(initialDate);
-  openModal(editing ? "Editar excepcion de horario" : "Nueva excepcion de horario", `${name}`, editing ? `Excepcion del ${initialDate}` : "Excepcion o cambio permanente", `
-    <p class="modalNote">Usa excepcion para fechas puntuales. Si el horario cambia de ahora en adelante, activa el cambio permanente para actualizar tambien el horario semanal.</p>
-    ${editing ? "" : `<div class="modeToggle" role="tablist" aria-label="Modo de seleccion de fechas">
+  openModal(editing ? "Editar excepción de horario" : "Nueva excepción de horario", `${name}`, editing ? `Excepción del ${initialDate}` : "Excepción o cambio permanente", `
+    <p class="modalNote">Usa excepción para fechas puntuales. Si el horario cambia de ahora en adelante, activa el cambio permanente para actualizar también el horario semanal.</p>
+    ${editing ? "" : `<div class="modeToggle" role="tablist" aria-label="Modo de selección de fechas">
       <label class="modeOption"><input type="radio" name="o-mode" value="range" checked> <span>Por rango de fechas</span></label>
-      <label class="modeOption"><input type="radio" name="o-mode" value="specific"> <span>Fechas especificas</span></label>
+      <label class="modeOption"><input type="radio" name="o-mode" value="specific"> <span>Fechas específicas</span></label>
     </div>`}
     <div id="o-range-wrap">
     <div class="formGrid">
       <label class="field"><span class="fieldLabel">Desde</span><input type="date" id="o-date-start" class="input" value="${escapeHtml(initialDate)}" ${editing ? "disabled" : ""}></label>
       <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="o-date-end" class="input" value="${escapeHtml(initialDate)}" ${editing ? "disabled" : ""}></label>
     </div>
-    <div class="weekdayPick" aria-label="Dias de la excepcion">
+    <div class="weekdayPick" aria-label="Días de la excepción">
       ${WEEK_DAYS.map((d) => `<label class="dayCheck"><input type="checkbox" class="o-weekday" value="${d.key}" ${(editing ? d.key === initialWeekday : true) ? "checked" : ""} ${editing ? "disabled" : ""}><span>${escapeHtml(d.short)}</span></label>`).join("")}
     </div>
     </div>
@@ -2494,11 +2494,11 @@ function openOverrideModalV2(email, existingOverride = null) {
         <input type="date" id="o-specific-date" class="input" value="${escapeHtml(initialDate)}">
         <button class="btnGhost btnSmall" type="button" id="o-specific-add">+ Agregar fecha</button>
       </div>
-      <p class="modalNote">Agrega los dias sueltos que quieras (ej: este martes, o 3 martes del mes).</p>
+      <p class="modalNote">Agrega los días sueltos que quieras (ej: este martes, o 3 martes del mes).</p>
       <div class="specificList" id="o-specific-list"></div>
     </div>`}
     <div class="formGrid">
-      <label class="field checkField"><input type="checkbox" id="o-enabled" ${initialEnabled ? "checked" : ""}> <span>Trabaja esos dias</span></label>
+      <label class="field checkField"><input type="checkbox" id="o-enabled" ${initialEnabled ? "checked" : ""}> <span>Trabaja esos días</span></label>
       <label class="field"><span class="fieldLabel">Ingreso</span><input type="time" id="o-start" class="input" value="${escapeHtml(existingOverride?.start || "10:00")}"></label>
       <label class="field"><span class="fieldLabel">Salida</span><input type="time" id="o-end" class="input" value="${escapeHtml(existingOverride?.end || "16:00")}"></label>
       <label class="field"><span class="fieldLabel">Modalidad</span>
@@ -2506,12 +2506,12 @@ function openOverrideModalV2(email, existingOverride = null) {
       <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : 5}"></label>
     </div>
     <label class="field checkField permanentCheck"><input type="checkbox" id="o-permanent" ${editing ? "disabled" : ""}> <span>Este es el nuevo horario permanente desde ahora</span></label>
-    <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunion externa autorizada" value="${escapeHtml(existingOverride?.reason || "")}"></label>
+    <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunión externa autorizada" value="${escapeHtml(existingOverride?.reason || "")}"></label>
     <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">${editing ? "Guardar edicion" : "Guardar cambio"}</button></div>
   `);
   $("#o-cancel").addEventListener("click", closeModal);
 
-  // Modo de seleccion: rango (por defecto) o fechas especificas
+  // Modo de selección: rango (por defecto) o fechas específicas
   const specificDates = new Set();
   const getMode = () => (document.querySelector('input[name="o-mode"]:checked')?.value || "range");
   const renderSpecificList = () => {
@@ -2520,7 +2520,7 @@ function openOverrideModalV2(email, existingOverride = null) {
     const arr = Array.from(specificDates).sort();
     list.innerHTML = arr.length
       ? arr.map((d) => `<span class="dateChip" data-date="${d}">${escapeHtml(formatLongDate(d) || d)} <button type="button" class="dateChipX" data-date="${d}" aria-label="Quitar">×</button></span>`).join("")
-      : `<span class="modalNote">Aun no agregaste fechas.</span>`;
+      : `<span class="modalNote">Aún no agregaste fechas.</span>`;
     $$(".dateChipX", list).forEach((btn) => btn.addEventListener("click", () => { specificDates.delete(btn.dataset.date); renderSpecificList(); }));
   };
   const syncMode = () => {
@@ -2578,7 +2578,7 @@ function openOverrideModalV2(email, existingOverride = null) {
     const reason = $("#o-reason").value.trim();
     const permanent = enabled && $("#o-permanent").checked;
     const permanentDays = Array.from(new Set(dates.map(weekdayKeyForDate)));
-    if (!confirm(editing ? `Guardar cambios en la excepcion del ${initialDate}?` : `Guardar este cambio para ${dates.length} fecha${dates.length === 1 ? "" : "s"}${permanent ? " y actualizar el horario semanal" : ""}?`)) return;
+    if (!confirm(editing ? `Guardar cambios en la excepción del ${initialDate}?` : `Guardar este cambio para ${dates.length} fecha${dates.length === 1 ? "" : "s"}${permanent ? " y actualizar el horario semanal" : ""}?`)) return;
     try {
       for (const date of dates) {
         const payload = {
@@ -2606,12 +2606,12 @@ function openOverrideModalV2(email, existingOverride = null) {
         await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(email)), { ...settingsPayload, createdAt: serverTimestamp() }, { merge: true });
         MEMBER_SETTINGS[email] = normalizeSettings(settingsPayload);
       }
-      toast(permanent ? "Horario permanente y excepciones guardados" : "Excepcion guardada", { kind: "ok" });
+      toast(permanent ? "Horario permanente y excepciones guardados" : "Excepción guardada", { kind: "ok" });
       await closeModal();
       renderMemberSettings();
     } catch (error) {
       console.error(error);
-      toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo guardar el cambio.", { kind: "warn" });
+      toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar el cambio.", { kind: "warn" });
     }
   });
 }
@@ -2619,34 +2619,34 @@ function openOverrideModalV2(email, existingOverride = null) {
 async function deleteScheduleOverride(id) {
   if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
   const override = Object.values(SCHEDULE_OVERRIDES).find((o) => o.id === id);
-  if (!override) { toast("No se encontro la excepcion.", { kind: "warn" }); return; }
-  if (!confirm(`Eliminar la excepcion del ${override.date}?`)) return;
+  if (!override) { toast("No se encontró la excepción.", { kind: "warn" }); return; }
+  if (!confirm(`Eliminar la excepción del ${override.date}?`)) return;
   try {
     await deleteDoc(doc(DB, COLLECTIONS.scheduleOverrides, id));
     delete SCHEDULE_OVERRIDES[`${override.email}__${override.date}`];
-    toast("Excepcion eliminada", { kind: "ok" });
+    toast("Excepción eliminada", { kind: "ok" });
     renderMemberSettings();
   } catch (error) {
     console.error(error);
-    toast(error?.code === "permission-denied" ? "No tienes permisos para eliminar esta excepcion." : "No se pudo eliminar la excepcion.", { kind: "warn" });
+    toast(error?.code === "permission-denied" ? "No tienes permisos para eliminar esta excepción." : "No se pudo eliminar la excepción.", { kind: "warn" });
   }
 }
 
 function openOverrideModal(email) {
   const name = getProfileName(email);
-  openModal("Nueva excepcion de horario", `${name}`, "Excepcion por fecha", `
+  openModal("Nueva excepción de horario", `${name}`, "Excepción por fecha", `
     <p class="modalNote">Define un horario distinto para una fecha concreta. No cambia el horario semanal.</p>
     <div class="formGrid">
       <label class="field"><span class="fieldLabel">Fecha</span><input type="date" id="o-date" class="input" value="${todayBogota()}"></label>
-      <label class="field checkField"><input type="checkbox" id="o-enabled" checked> <span>Trabaja ese dia</span></label>
+      <label class="field checkField"><input type="checkbox" id="o-enabled" checked> <span>Trabaja ese día</span></label>
       <label class="field"><span class="fieldLabel">Ingreso</span><input type="time" id="o-start" class="input" value="10:00"></label>
       <label class="field"><span class="fieldLabel">Salida</span><input type="time" id="o-end" class="input" value="16:00"></label>
       <label class="field"><span class="fieldLabel">Modalidad</span>
         <select id="o-modality" class="input">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}">${m}</option>`).join("")}</select></label>
       <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="5"></label>
     </div>
-    <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunion externa autorizada"></label>
-    <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">Crear excepcion</button></div>
+    <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunión externa autorizada"></label>
+    <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">Crear excepción</button></div>
   `);
   $("#o-cancel").addEventListener("click", closeModal);
   $("#o-save").addEventListener("click", async () => {
@@ -2658,17 +2658,17 @@ function openOverrideModal(email) {
       modality: $("#o-modality").value, graceMinutes: Number($("#o-grace").value) || 0,
       reason: $("#o-reason").value.trim(), createdBy: ACTIVE_EMAIL, createdAt: serverTimestamp(), createdAtClient: Date.now()
     };
-    if (!confirm("¿Crear esta excepcion de horario?")) return;
+    if (!confirm("¿Crear esta excepción de horario?")) return;
     try {
       const id = `${safeEmailId(email)}_${date}`;
       await setDoc(doc(DB, COLLECTIONS.scheduleOverrides, id), payload, { merge: true });
       SCHEDULE_OVERRIDES[`${email}__${date}`] = { id, ...payload };
-      toast("Excepcion creada", { kind: "ok" });
+      toast("Excepción creada", { kind: "ok" });
       await closeModal();
       renderMemberSettings();
     } catch (error) {
       console.error(error);
-      toast(error?.code === "permission-denied" ? "No tienes permisos para esta accion." : "No se pudo crear la excepcion.", { kind: "warn" });
+      toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo crear la excepción.", { kind: "warn" });
     }
   });
 }
@@ -2677,7 +2677,7 @@ function openOverrideModal(email) {
    6f. Vista: Equipo — admin
 ========================================================================== */
 async function renderTeamTab() {
-  if (!isCurrentUserAdmin()) { toast("Seccion solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
+  if (!isCurrentUserAdmin()) { toast("Sección solo para administradores.", { kind: "warn" }); return goTab("inicio"); }
   await loadAdminData({ force: true }).catch(() => {});
   const members = adminMemberList();
   setPanel(`
@@ -2721,7 +2721,7 @@ async function renderTeamTab() {
    8. Auth + mount
 ========================================================================== */
 function friendlyAuthError(code = "") {
-  if (code === "auth/unauthorized-domain") return "Esta direccion de la app no esta habilitada para iniciar sesion.";
+  if (code === "auth/unauthorized-domain") return "Esta dirección de la app no está habilitada para iniciar sesión.";
   if (code === "auth/popup-blocked") return "El navegador bloqueo la ventana de Google.";
   if (code === "auth/popup-closed-by-user") return "Cerraste el login.";
   if (code === "auth/network-request-failed") return "Fallo la red.";
@@ -2742,13 +2742,13 @@ async function doGoogleLogin(auth) {
       if (popupError?.code === "auth/popup-closed-by-user") return;
       const shouldTryRedirect = ["auth/popup-blocked", "auth/cancelled-popup-request", "auth/operation-not-supported-in-this-environment"].includes(popupError?.code);
       if (!shouldTryRedirect && !isStandalone()) throw popupError;
-      toast("Te vamos a llevar a Google para iniciar sesion.", { ms: 2400 });
+      toast("Te vamos a llevar a Google para iniciar sesión.", { ms: 2400 });
       await signInWithRedirect(auth, provider);
     }
   } catch (error) {
     if (error?.code === "auth/popup-closed-by-user") return;
     const friendly = friendlyAuthError(error?.code || "");
-    toast(friendly ? `No se pudo iniciar sesion: ${friendly}` : "No se pudo iniciar sesion");
+    toast(friendly ? `No se pudo iniciar sesión: ${friendly}` : "No se pudo iniciar sesión");
     console.error(error);
   } finally {
     loginLock = false;
@@ -2760,7 +2760,7 @@ async function finalizeRedirectIfAny(auth) {
   try { await getRedirectResult(auth); }
   catch (error) {
     const friendly = friendlyAuthError(error?.code || "");
-    toast(friendly ? `No se pudo completar el inicio de sesion: ${friendly}` : "No se pudo completar el inicio de sesion");
+    toast(friendly ? `No se pudo completar el inicio de sesión: ${friendly}` : "No se pudo completar el inicio de sesión");
   }
 }
 
@@ -2775,7 +2775,7 @@ function setHubCopy() {
 
 async function mount() {
   setHubCopy();
-  if (!assertConfig(firebaseConfig)) { show("login"); toast("No se pudo cargar la configuracion de la app. Intenta mas tarde."); return; }
+  if (!assertConfig(firebaseConfig)) { show("login"); toast("No se pudo cargar la configuración de la app. Intenta más tarde."); return; }
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
@@ -2786,8 +2786,8 @@ async function mount() {
   $("#btn-google")?.addEventListener("click", () => doGoogleLogin(auth));
   $("#btn-refresh-app")?.addEventListener("click", clearLocalAppCacheAndReload);
   $("#btn-logout")?.addEventListener("click", async () => {
-    try { await signOut(auth); show("login"); toast("Sesion cerrada"); }
-    catch (_) { toast("No se pudo cerrar sesion. Intenta de nuevo."); }
+    try { await signOut(auth); show("login"); toast("Sesión cerrada"); }
+    catch (_) { toast("No se pudo cerrar sesión. Intenta de nuevo."); }
   });
 
   onAuthStateChanged(auth, async (user) => {

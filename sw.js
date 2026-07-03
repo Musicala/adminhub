@@ -4,7 +4,7 @@
    - Navegacion y archivos principales: network-first con cache no-store.
    - Assets secundarios: cache con actualizacion en segundo plano.
 */
-const BUILD = "2026-07-03.2";
+const BUILD = "2026-07-03.3";
 const VERSION = "admin-hub-" + BUILD;
 const CACHE_STATIC = `musicala-admin-static-${VERSION}`;
 const CACHE_RUNTIME = `musicala-admin-runtime-${VERSION}`;
