@@ -1264,10 +1264,11 @@ function renderCalendarMonth(email, year, month) {
       continue;
     }
     const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
+    const isRemote = normalizeIdentity(schedule.modality) === "remoto";
     cells.push(`<button class="annualDay work${schedule.source === "override" ? " override" : ""}" type="button" data-date="${date}">
-      <strong>${day}</strong>
-      <span>${escapeHtml(hhmmTo12h(schedule.start))} - ${escapeHtml(hhmmTo12h(schedule.end))}</span>
-      <small>${escapeHtml(schedule.modality || "sede")}${raw > 360 ? " · almuerzo" : ""}</small>
+      <span class="annualDayHead"><strong>${day}</strong>${isRemote ? `<em class="remoteDayBadge" title="Esta jornada es remota">Remoto</em>` : ""}</span>
+      <span class="annualDayHours"><span>${escapeHtml(hhmmTo12h(schedule.start))}</span><i aria-hidden="true">–</i><span>${escapeHtml(hhmmTo12h(schedule.end))}</span></span>
+      ${raw > 360 ? `<small>Incluye almuerzo</small>` : ""}
     </button>`);
   }
   return `<section class="annualMonth card">
@@ -1323,6 +1324,7 @@ async function renderAnnualCalendarTab() {
 
     <section class="annualLegend">
       <span class="legendChip work">Con jornada</span>
+      <span class="legendChip remote">Remoto</span>
       <span class="legendChip free">Sin jornada</span>
       <span class="legendChip override">Excepción</span>
     </section>

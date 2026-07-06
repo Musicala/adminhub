@@ -1773,6 +1773,7 @@ textarea.input{ resize:vertical; font-family:inherit; }
   font-weight:800;
 }
 .legendChip.work{ color:var(--a1); background:rgba(12,65,196,.08); border-color:rgba(12,65,196,.18); }
+.legendChip.remote{ color:#075985; background:#e0f2fe; border-color:#7dd3fc; }
 .legendChip.free{ color:var(--muted); background:var(--muteBg); }
 .legendChip.override{ color:var(--a3); background:rgba(206,0,113,.08); border-color:rgba(206,0,113,.18); }
 .annualYearGrid{
@@ -1866,6 +1867,34 @@ textarea.input{ resize:vertical; font-family:inherit; }
   font-size:13px;
   line-height:1;
 }
+.annualDayHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:4px;
+  width:100%;
+}
+.annualDay .remoteDayBadge{
+  padding:3px 6px;
+  border-radius:999px;
+  background:#e0f2fe;
+  color:#075985;
+  font-size:9.5px;
+  font-style:normal;
+  font-weight:900;
+  line-height:1;
+  white-space:nowrap;
+}
+.annualDay .annualDayHours{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  flex-wrap:wrap;
+}
+.annualDayHours i{
+  color:var(--a1);
+  font-style:normal;
+}
 .annualDay span{
   color:var(--a1);
   font-size:11.5px;
@@ -1899,16 +1928,31 @@ textarea.input{ resize:vertical; font-family:inherit; }
   .annualYearGrid{ grid-template-columns:1fr; }
 }
 @media (max-width:620px){
-  .annualMonth{ padding:10px; }
+  .annualMonth{
+    padding:10px;
+    overflow-x:auto;
+    overscroll-behavior-inline:contain;
+    scrollbar-width:thin;
+  }
   .annualWeekdays,
-  .annualGrid{ gap:4px; }
+  .annualGrid{
+    min-width:560px;
+    gap:5px;
+  }
   .annualDay{
-    min-height:64px;
-    padding:6px;
+    min-height:92px;
+    padding:7px;
     border-radius:10px;
   }
-  .annualDay span{ font-size:10px; }
-  .annualDay small{ display:none; }
+  .annualDay span{ font-size:11px; }
+  .annualDay .remoteDayBadge{ font-size:9px; }
+  .annualDay .annualDayHours{
+    align-items:flex-start;
+    flex-direction:column;
+    gap:1px;
+  }
+  .annualDayHours i{ display:none; }
+  .annualDay small{ font-size:9px; }
 }
 
 /* ===== Toast con tono ===== */
