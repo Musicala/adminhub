@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-03.6";
+const BUILD = "2026-07-05.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -579,7 +579,7 @@ function calculateShiftStatus(record, schedule) {
 
   if (hasIngreso && hasSalida) {
     const wi = toMinutes(ingreso), ws = toMinutes(salida);
-    if (wi != null && ws != null) out.workedMinutes = Math.max(0, ws - wi);
+    if (wi != null && ws != null) out.workedMinutes = effectiveDurationMinutes(Math.max(0, ws - wi));
   }
 
   // Sin horario configurado para ese día
@@ -593,7 +593,7 @@ function calculateShiftStatus(record, schedule) {
   const startMin = toMinutes(schedule.start);
   const endMin = toMinutes(schedule.end);
   const grace = Number.isFinite(schedule.graceMinutes) ? schedule.graceMinutes : 5;
-  if (startMin != null && endMin != null) out.expectedMinutes = Math.max(0, endMin - startMin);
+  if (startMin != null && endMin != null) out.expectedMinutes = effectiveDurationMinutes(Math.max(0, endMin - startMin));
 
   if (!hasIngreso) {
     out.status = "ausente"; out.label = "Ausente"; out.isAbsent = true;
@@ -1205,7 +1205,11 @@ function effectiveShiftMinutes(schedule) {
   const start = toMinutes(schedule.start);
   const end = toMinutes(schedule.end);
   if (start == null || end == null || end <= start) return 0;
-  const raw = end - start;
+  return effectiveDurationMinutes(end - start);
+}
+
+function effectiveDurationMinutes(rawMinutes) {
+  const raw = Math.max(0, Number(rawMinutes) || 0);
   return Math.max(0, raw - (raw > 360 ? 60 : 0));
 }
 
@@ -2281,8 +2285,8 @@ function renderStatsUI() {
       ${kpiCard("Llegadas tarde", g.late, `prom. ${g.avgLateMinutes} min`, g.late ? "late" : "ok")}
       ${kpiCard("Ausencias", g.absent, "según horario", g.absent ? "absent" : "ok")}
       ${kpiCard("Jornadas incompletas", g.incompleteDays, "sin salida", g.incompleteDays ? "warn" : "ok")}
-      ${kpiCard("Horas trabajadas", minutesToHhmm(g.totalWorkedMinutes), "registradas", "")}
-      ${kpiCard("Horas programadas", minutesToHhmm(g.totalExpectedMinutes), `${g.expectedDays} jornadas`, "info")}
+      ${kpiCard("Horas trabajadas", minutesToHhmm(g.totalWorkedMinutes), "efectivas · almuerzo descontado", "")}
+      ${kpiCard("Horas programadas", minutesToHhmm(g.totalExpectedMinutes), `${g.expectedDays} jornadas · efectivas`, "info")}
       ${kpiCard("Cumplimiento horario", g.compliancePct + "%", "trabajadas / programadas", g.compliancePct >= 95 ? "ok" : "warn")}
       ${kpiCard("Balance de horas", signedMinutesToHhmm(g.netBalanceMinutes), g.netBalanceMinutes < 0 ? "déficit del periodo" : "excedente del periodo", g.netBalanceMinutes < 0 ? "late" : "ok")}
       ${kpiCard("Minutos tarde", g.totalLateMinutes, "acumulados", "")}
@@ -2374,7 +2378,7 @@ function renderStatsUI() {
 
     <section class="dashSection">
       <h3 class="sectionH">⏱️ Impacto diario sobre la jornada</h3>
-      <p class="sectionSub">Compara capacidad programada, tiempo registrado y minutos afectados por tardanzas o salidas tempranas.</p>
+      <p class="sectionSub">Compara horas efectivas programadas y registradas. En jornadas mayores a 6h se descuenta 1h de almuerzo.</p>
       <div class="tableWrap"><table class="dataTable">
         <thead><tr><th>Fecha</th><th>Programado</th><th>Trabajado</th><th>Cumplimiento</th><th>Tardanzas</th><th>Salidas temp.</th><th>Impacto</th><th>Balance</th></tr></thead>
         <tbody>${stats.dayRows.slice().reverse().map((d) => `<tr>
