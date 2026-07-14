@@ -1834,13 +1834,56 @@ textarea.input{ resize:vertical; font-family:inherit; }
   color:var(--text);
 }
 .annualWeekdays,
-.annualGrid{
+.annualGrid,
+.annualWeekRow{
   display:grid;
   grid-template-columns:repeat(7,minmax(0,1fr));
   gap:6px;
 }
+.annualGrid.stacked{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
 .annualWeekdays{
   margin-bottom:6px;
+}
+.weekStatus{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  margin:1px 0 3px;
+  padding:5px 12px;
+  border-radius:9px;
+  border:1px solid var(--line);
+  font-size:11.5px;
+  font-weight:850;
+  background:rgba(11,16,32,.03);
+}
+.weekStatus .weekStatusLabel{ font-weight:900; }
+.weekStatus .weekStatusHours{ color:var(--muted); font-weight:800; }
+.weekStatus .weekStatusShared{
+  margin-left:auto;
+  font-style:normal;
+  font-weight:800;
+  color:var(--muted);
+  font-size:10.5px;
+}
+.weekStatus.ok{
+  border-color:rgba(21,128,61,.28);
+  background:rgba(21,128,61,.08);
+  color:#166534;
+}
+.weekStatus.over{
+  border-color:rgba(12,65,196,.24);
+  background:rgba(12,65,196,.07);
+  color:#0c41c4;
+}
+.weekStatus.warn{
+  border-color:rgba(206,0,113,.30);
+  background:rgba(206,0,113,.08);
+  color:#a3005b;
 }
 .annualWeekdays span{
   text-align:center;
@@ -1935,9 +1978,14 @@ textarea.input{ resize:vertical; font-family:inherit; }
     scrollbar-width:thin;
   }
   .annualWeekdays,
-  .annualGrid{
+  .annualGrid,
+  .annualWeekRow{
     min-width:560px;
     gap:5px;
+  }
+  .weekStatus{
+    min-width:560px;
+    font-size:11px;
   }
   .annualDay{
     min-height:92px;

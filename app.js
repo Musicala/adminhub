@@ -123,6 +123,10 @@ const MONTH_NAMES = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
 ];
 
+// Meta de horas efectivas semanales (Lun–Sáb) usada para avisar si una semana
+// cumple la jornada legal. Configurable por miembro. 44h = jornada legal 2025.
+const DEFAULT_WEEKLY_TARGET_HOURS = 44;
+
 const DEFAULT_DAY = {
   enabled: false,
   start: "08:50",
@@ -483,6 +487,7 @@ function defaultSettingsFor(email, extra = {}) {
     active: true,
     canWorkRemote: REMOTE_WORK_ALLOWED_USERS.map(normalizeIdentity).includes(normalizeIdentity(email)),
     defaultGraceMinutes: 5,
+    weeklyTargetHours: DEFAULT_WEEKLY_TARGET_HOURS,
     weeklySchedule: defaultWeeklySchedule(),
     ...extra
   };
@@ -509,6 +514,7 @@ function normalizeSettings(data) {
     active: data?.active !== false,
     canWorkRemote: Boolean(data?.canWorkRemote),
     defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
+    weeklyTargetHours: Number.isFinite(data?.weeklyTargetHours) && data.weeklyTargetHours > 0 ? data.weeklyTargetHours : DEFAULT_WEEKLY_TARGET_HOURS,
     weeklySchedule: weekly,
     updatedAtClient: data?.updatedAtClient || null,
     updatedBy: data?.updatedBy || ""
@@ -1242,39 +1248,114 @@ function annualCalendarStats(email, year) {
       if (raw > 360) lunchDays++;
     }
   }
-  return { workDays, freeDays, effectiveMinutes, lunchDays, overrideDays };
+  // Semanas incompletas: recorre semanas Lun–Dom cuyo lunes cae en el año.
+  const targetHours = MEMBER_SETTINGS[email]?.weeklyTargetHours ?? DEFAULT_WEEKLY_TARGET_HOURS;
+  const targetMin = Math.round((Number(targetHours) || 0) * 60);
+  let incompleteWeeks = 0;
+  let scheduledWeeks = 0;
+  if (targetMin > 0) {
+    const jan1 = `${year}-01-01`;
+    const jan1Dow = (parseLocalDateInput(jan1).getDay() + 6) % 7; // 0 = lunes
+    let monday = addDaysStr(jan1, -jan1Dow);
+    for (let guard = 0; guard < 60; guard++, monday = addDaysStr(monday, 7)) {
+      if (monday.slice(0, 4) > String(year)) break;
+      if (monday.slice(0, 4) !== String(year)) continue; // atribuir la semana al año de su lunes
+      const wk = weekEffectiveStats(email, monday);
+      if (wk.minutes <= 0) continue; // semana sin jornada programada: no se cuenta
+      scheduledWeeks++;
+      if (wk.minutes < targetMin) incompleteWeeks++;
+    }
+  }
+  return { workDays, freeDays, effectiveMinutes, lunchDays, overrideDays, incompleteWeeks, scheduledWeeks, targetMin };
+}
+
+/* Horas efectivas de una semana real (Lun–Sáb) a partir del lunes que la inicia.
+   Recorre las 6 fechas reales aunque caigan en otro mes: así una semana que
+   pertenece a dos meses se calcula completa desde cualquiera de los dos. */
+function weekEffectiveStats(email, mondayDate) {
+  let minutes = 0;
+  let workedDays = 0;
+  const months = new Set();
+  for (let d = 0; d < 7; d++) {
+    const date = addDaysStr(mondayDate, d);
+    months.add(date.slice(0, 7));
+    if (d === 6) continue; // domingo no cuenta para la jornada legal
+    const schedule = getCalendarDayForDate(email, date).schedule;
+    const eff = effectiveShiftMinutes(schedule);
+    if (eff > 0) { minutes += eff; workedDays++; }
+  }
+  return { minutes, workedDays, months: [...months] };
+}
+
+function renderWeekStatus(email, mondayDate, renderedMonthKey) {
+  const targetHours = MEMBER_SETTINGS[email]?.weeklyTargetHours ?? DEFAULT_WEEKLY_TARGET_HOURS;
+  const targetMin = Math.round((Number(targetHours) || 0) * 60);
+  if (targetMin <= 0) return "";
+  const { minutes, months } = weekEffectiveStats(email, mondayDate);
+  const diff = minutes - targetMin;
+  const shared = months.length > 1;
+  // Aviso cuando la semana se reparte entre dos meses: sus horas se cuentan completas.
+  const sharedNote = shared
+    ? `<em class="weekStatusShared" title="Esta semana pertenece a dos meses; las horas se cuentan completas">${months.map((m) => escapeHtml(MONTH_NAMES[Number(m.slice(5, 7)) - 1])).join(" · ")}</em>`
+    : "";
+  let tone, label;
+  if (diff >= 0) {
+    tone = diff === 0 ? "ok" : "over";
+    label = diff === 0
+      ? `Semana completa`
+      : `Completa · +${minutesToHhmm(diff)}`;
+  } else {
+    tone = "warn";
+    label = `Faltan ${minutesToHhmm(-diff)}`;
+  }
+  return `<div class="weekStatus ${tone}">
+    <span class="weekStatusLabel">${label}</span>
+    <span class="weekStatusHours">${minutesToHhmm(minutes)} / ${minutesToHhmm(targetMin)}</span>
+    ${sharedNote}
+  </div>`;
 }
 
 function renderCalendarMonth(email, year, month) {
+  const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
   const first = new Date(year, month, 1);
   const offset = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    const day = i - offset + 1;
-    if (day < 1 || day > daysInMonth) {
-      cells.push(`<div class="annualDay muted" aria-hidden="true"></div>`);
-      continue;
+  const monthFirstStr = `${monthKey}-01`;
+  const rows = [];
+  for (let w = 0; w < 6; w++) {
+    const cells = [];
+    let hasCurrentMonthDay = false;
+    for (let c = 0; c < 7; c++) {
+      const i = w * 7 + c;
+      const day = i - offset + 1;
+      if (day < 1 || day > daysInMonth) {
+        cells.push(`<div class="annualDay muted" aria-hidden="true"></div>`);
+        continue;
+      }
+      hasCurrentMonthDay = true;
+      const date = `${monthKey}-${String(day).padStart(2, "0")}`;
+      const dayData = getCalendarDayForDate(email, date);
+      const schedule = dayData.schedule;
+      if (!schedule) {
+        cells.push(`<button class="annualDay free" type="button" data-date="${date}"><strong>${day}</strong><span>${escapeHtml(dayData.label || "Sin jornada")}</span></button>`);
+        continue;
+      }
+      const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
+      const isRemote = normalizeIdentity(schedule.modality) === "remoto";
+      cells.push(`<button class="annualDay work${schedule.source === "override" ? " override" : ""}" type="button" data-date="${date}">
+        <span class="annualDayHead"><strong>${day}</strong>${isRemote ? `<em class="remoteDayBadge" title="Esta jornada es remota">Remoto</em>` : ""}</span>
+        <span class="annualDayHours"><span>${escapeHtml(hhmmTo12h(schedule.start))}</span><i aria-hidden="true">–</i><span>${escapeHtml(hhmmTo12h(schedule.end))}</span></span>
+        ${raw > 360 ? `<small>Incluye almuerzo</small>` : ""}
+      </button>`);
     }
-    const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const dayData = getCalendarDayForDate(email, date);
-    const schedule = dayData.schedule;
-    if (!schedule) {
-      cells.push(`<button class="annualDay free" type="button" data-date="${date}"><strong>${day}</strong><span>${escapeHtml(dayData.label || "Sin jornada")}</span></button>`);
-      continue;
-    }
-    const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
-    const isRemote = normalizeIdentity(schedule.modality) === "remoto";
-    cells.push(`<button class="annualDay work${schedule.source === "override" ? " override" : ""}" type="button" data-date="${date}">
-      <span class="annualDayHead"><strong>${day}</strong>${isRemote ? `<em class="remoteDayBadge" title="Esta jornada es remota">Remoto</em>` : ""}</span>
-      <span class="annualDayHours"><span>${escapeHtml(hhmmTo12h(schedule.start))}</span><i aria-hidden="true">–</i><span>${escapeHtml(hhmmTo12h(schedule.end))}</span></span>
-      ${raw > 360 ? `<small>Incluye almuerzo</small>` : ""}
-    </button>`);
+    if (!hasCurrentMonthDay) continue; // fila totalmente fuera del mes: se omite
+    const mondayDate = addDaysStr(monthFirstStr, w * 7 - offset);
+    rows.push(`<div class="annualWeekRow">${cells.join("")}</div>${renderWeekStatus(email, mondayDate, monthKey)}`);
   }
   return `<section class="annualMonth card">
     <h3>${escapeHtml(MONTH_NAMES[month])}</h3>
     <div class="annualWeekdays">${WEEK_DAYS.map((d) => `<span>${escapeHtml(d.short)}</span>`).join("")}</div>
-    <div class="annualGrid">${cells.join("")}</div>
+    <div class="annualGrid stacked">${rows.join("")}</div>
   </section>`;
 }
 
@@ -1306,7 +1387,7 @@ async function renderAnnualCalendarTab() {
       <div>
         <p class="dashEyebrow">Jornadas de trabajo</p>
         <h2 class="dashTitle">Horario anual de ${escapeHtml(activeMember.name)}</h2>
-        <p class="dashSub">Todas las horas mostradas son efectivas. Si la jornada supera 6h, se descuenta 1h de almuerzo.</p>
+        <p class="dashSub">Horas efectivas (jornadas &gt;6h descuentan 1h de almuerzo). Cada semana Lun–Sáb indica si cumple la meta configurada; las semanas repartidas en dos meses se cuentan completas.</p>
       </div>
       <div class="headActions">
         ${isCurrentUserAdmin() ? `<label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="cal-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === activeMember.email ? "selected" : ""}>${escapeHtml(m.name)}${isAdminEmail(m.email) ? " (admin)" : ""}</option>`).join("")}</select></label>` : ""}
@@ -1318,7 +1399,7 @@ async function renderAnnualCalendarTab() {
       ${kpiCard("Horas efectivas", minutesToHhmm(stats.effectiveMinutes), "almuerzo ya descontado", "info")}
       ${kpiCard("Días con jornada", stats.workDays, "en el año seleccionado", "ok")}
       ${kpiCard("Días sin jornada", stats.freeDays, "incluye descansos y festivos", "")}
-      ${kpiCard("Con almuerzo", stats.lunchDays, "jornadas mayores a 6h", "warn")}
+      ${kpiCard("Semanas incompletas", stats.incompleteWeeks, `de ${stats.scheduledWeeks} con jornada · meta ${minutesToHhmm(stats.targetMin)}/sem`, stats.incompleteWeeks ? "warn" : "ok")}
       ${kpiCard("Excepciones", stats.overrideDays, "cambios por fecha", stats.overrideDays ? "info" : "")}
     </section>
 
@@ -2532,6 +2613,7 @@ function renderMemberSettings() {
           <label class="field"><span class="fieldLabel">Rol</span>
             <select id="m-role" class="input"><option value="member" ${s.role !== "admin" ? "selected" : ""}>Miembro</option><option value="admin" ${s.role === "admin" ? "selected" : ""}>Admin</option></select></label>
           <label class="field"><span class="fieldLabel">Gracia por defecto (min)</span><input type="number" id="m-grace" class="input" min="0" max="120" value="${s.defaultGraceMinutes}"></label>
+          <label class="field"><span class="fieldLabel">Horas semanales (Lun–Sáb)</span><input type="number" id="m-weekly-target" class="input" min="0" max="60" step="0.5" value="${s.weeklyTargetHours}"></label>
         </div>
         <div class="cfgToggles">
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
@@ -2624,6 +2706,7 @@ async function saveMemberSettings() {
     active: $("#m-active").checked,
     canWorkRemote: $("#m-remote").checked,
     defaultGraceMinutes: Number($("#m-grace").value) || 0,
+    weeklyTargetHours: Number($("#m-weekly-target").value) || DEFAULT_WEEKLY_TARGET_HOURS,
     weeklySchedule: weekly,
     updatedAt: serverTimestamp(),
     updatedAtClient: Date.now(),
