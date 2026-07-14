@@ -36,6 +36,16 @@ service cloud.firestore {
       ];
     }
 
+    // Equipo de Seguimiento de Compras. Mantener sincronizado con ALLOWED_EMAILS en app.js de compras.
+    function isComprasUser() {
+      return signedIn() && userEmail() in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com',
+        'adminmusicala@gmail.com',
+        'musicalaasesor@gmail.com'
+      ];
+    }
+
     // Un usuario autenticado escribe solo su propio registro de jornada por el flujo normal.
     // La app ya bloquea el acceso a correos fuera de HUB.USERS; aqui evitamos duplicar
     // la lista para que QR/remoto no falle cuando el equipo cambia.
@@ -174,6 +184,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ===== Seguimiento de Compras (ruta aislada) =====
+    match /apps/compras-musicala/items/{itemId} {
+      allow read, create, update: if isComprasUser();
+      allow delete: if false;
+    }
+
     // ===== Datos aislados de Manager Musicala =====
     match /apps/manager-musicala {
       allow read, write: if false;
@@ -287,27 +303,11 @@ service cloud.firestore {
         allow read: if isManagerActiveUser();
         allow create, update, delete: if isManagerCertificateManager();
       }
-    }
 
-    // ===== Compras internas Musicala (aislado) =====
-    // Datos exclusivos del aplicativo de compras. No toca ninguna otra coleccion.
-    // Equipo autorizado sincronizado con ALLOWED_EMAILS en app.js.
-    match /apps/compras-musicala {
-      allow read, write: if false;
-
-      function comprasTeam() {
-        return signedIn() && userEmail() in [
-          'alekcaballeromusic@gmail.com',
-          'catalina.medina.leal@gmail.com',
-          'adminmusicala@gmail.com',
-          'musicalaasesor@gmail.com'
-        ];
-      }
-
-      match /items/{itemId} {
-        allow read, create, update: if comprasTeam();
-        // Nunca se borra: se usa el estado "descartado".
-        allow delete: if false;
+      // Parqueadero (motos y ciclas): todo el equipo activo ve; admin y asistentes gestionan.
+      match /parking/{spotId} {
+        allow read: if isManagerActiveUser();
+        allow create, update, delete: if isManagerCertificateManager();
       }
     }
 
