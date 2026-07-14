@@ -75,7 +75,8 @@ const HUB = {
 const COLLECTIONS = {
   shiftRecords: "adminShiftRecords",
   memberSettings: "adminMemberSettings",
-  scheduleOverrides: "adminScheduleOverrides"
+  scheduleOverrides: "adminScheduleOverrides",
+  hoursBank: "adminHoursBank"
 };
 
 const LEGACY_ANNUAL_SCHEDULE_SOURCES = {
@@ -195,6 +196,7 @@ let lastQrSaveOkAt = 0;
 let CURRENT_TAB = "inicio";
 let MEMBER_SETTINGS = {};     // email -> settings doc (normalizado)
 let SCHEDULE_OVERRIDES = {};  // `${email}__${date}` -> override doc
+let HOURS_BANK = {};          // id -> movimiento de bolsa de horas
 let DATA_LOADED = false;
 
 /* ==========================================================================
@@ -439,12 +441,15 @@ async function loadAdminData({ force = false } = {}) {
   if (DATA_LOADED && !force) return;
   MEMBER_SETTINGS = {};
   SCHEDULE_OVERRIDES = {};
+  HOURS_BANK = {};
   try {
     if (isCurrentUserAdmin()) {
       const ms = await getDocs(collection(DB, COLLECTIONS.memberSettings));
       ms.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
       const ov = await getDocs(collection(DB, COLLECTIONS.scheduleOverrides));
       ov.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
+      const hb = await getDocs(collection(DB, COLLECTIONS.hoursBank));
+      hb.forEach((d) => { const data = normalizeHoursEntry(d.id, d.data()); if (data.email) HOURS_BANK[data.id] = data; });
     } else if (ACTIVE_EMAIL) {
       const sref = doc(DB, COLLECTIONS.memberSettings, safeEmailId(ACTIVE_EMAIL));
       const ssnap = await getDoc(sref);
@@ -452,6 +457,9 @@ async function loadAdminData({ force = false } = {}) {
       const oq = query(collection(DB, COLLECTIONS.scheduleOverrides), where("email", "==", ACTIVE_EMAIL));
       const osnap = await getDocs(oq);
       osnap.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
+      const hq = query(collection(DB, COLLECTIONS.hoursBank), where("email", "==", ACTIVE_EMAIL));
+      const hsnap = await getDocs(hq);
+      hsnap.forEach((d) => { const data = normalizeHoursEntry(d.id, d.data()); if (data.email) HOURS_BANK[data.id] = data; });
     }
   } catch (error) {
     console.warn("No se pudieron cargar configuraciones de horario", error);
@@ -478,6 +486,36 @@ function normalizeOverride(id, data) {
     createdBy: data?.createdBy || "",
     createdAtClient: data?.createdAtClient || null
   };
+}
+
+/* Movimiento de bolsa de horas.
+   kind "cargo" = queda pendiente por reponer (suma al saldo pendiente).
+   kind "abono" = repuso/cumplió horas (resta del saldo pendiente). */
+function normalizeHoursEntry(id, data) {
+  return {
+    id,
+    email: String(data?.email || "").toLowerCase().trim(),
+    date: data?.date || "",
+    kind: data?.kind === "abono" ? "abono" : "cargo",
+    hours: Number(data?.hours) > 0 ? Number(data.hours) : 0,
+    note: data?.note || "",
+    createdBy: data?.createdBy || "",
+    createdAtClient: data?.createdAtClient || null
+  };
+}
+
+function hoursBankEntriesFor(email) {
+  return Object.values(HOURS_BANK)
+    .filter((e) => e.email === email && e.hours > 0)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.createdAtClient || 0) - (b.createdAtClient || 0));
+}
+
+/* Saldo pendiente por reponer en minutos: cargos menos abonos.
+   >0 debe reponer, 0 al día, <0 a favor de la trabajadora. */
+function hoursBankBalanceMinutes(email) {
+  let bal = 0;
+  for (const e of hoursBankEntriesFor(email)) bal += (e.kind === "cargo" ? 1 : -1) * e.hours * 60;
+  return Math.round(bal);
 }
 
 function defaultSettingsFor(email, extra = {}) {
@@ -972,6 +1010,7 @@ const TABS = [
   { id: "inicio", label: "Inicio", admin: false },
   { id: "jornada", label: "Marcar", admin: false, memberOnly: true },
   { id: "calendario", label: "Horario anual", admin: false },
+  { id: "bolsa", label: "Bolsa de horas", admin: false },
   { id: "registros", label: "Registros", admin: false },
   { id: "stats", label: "Estadísticas", admin: true },
   { id: "config", label: "Configuración", admin: true },
@@ -1009,6 +1048,7 @@ async function goTab(tab) {
     case "inicio": return renderDashboard();
     case "jornada": return renderShiftTab();
     case "calendario": return renderAnnualCalendarTab();
+    case "bolsa": return renderHoursBankTab();
     case "registros": return renderRecordsTab();
     case "stats": return renderAdminStats();
     case "config": return renderConfigTab();
@@ -1594,6 +1634,142 @@ async function saveWeekTargetOverride(email, monday, hours) {
   } catch (error) {
     console.error(error);
     toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la meta.", { kind: "warn" });
+  }
+}
+
+/* ==========================================================================
+   6f. Vista: Bolsa de horas (permisos por reponer)
+========================================================================== */
+let BOLSA_EMAIL = "";
+
+async function renderHoursBankTab() {
+  setPanel(`<div class="loadingBlock">Cargando bolsa de horas…</div>`);
+  await loadAdminData({ force: isCurrentUserAdmin() }).catch(() => {});
+  const admin = isCurrentUserAdmin();
+  const members = admin ? statsMemberList() : [{ email: ACTIVE_EMAIL, name: getProfileName(ACTIVE_EMAIL) }];
+  BOLSA_EMAIL = admin
+    ? (BOLSA_EMAIL && members.some((m) => m.email === BOLSA_EMAIL) ? BOLSA_EMAIL : (members[0]?.email || ""))
+    : ACTIVE_EMAIL;
+  const email = BOLSA_EMAIL;
+  const name = getProfileName(email);
+  const entries = hoursBankEntriesFor(email); // ascendente por fecha
+  const balance = hoursBankBalanceMinutes(email);
+  const balTone = balance > 0 ? "warn" : (balance < 0 ? "info" : "ok");
+  const balText = balance > 0 ? `Debe reponer ${minutesToHhmm(balance)}` : (balance < 0 ? `A favor ${minutesToHhmm(-balance)}` : "Al día · 0h 00m");
+
+  let run = 0;
+  const rowsDesc = entries.map((e) => { run += (e.kind === "cargo" ? 1 : -1) * e.hours * 60; return { e, saldo: run }; }).reverse();
+
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">${admin ? "Panel admin" : "Mi información"}</p>
+        <h2 class="dashTitle">Bolsa de horas${admin ? "" : " de " + escapeHtml(name)}</h2>
+        <p class="dashSub">Registro de horas pendientes por reponer (permisos, salidas antes) y de las horas ya repuestas. No se conecta con el horario: es un control manual. Cuando el saldo llega a 0, está al día.</p>
+      </div>
+      ${admin ? `<div class="headActions">
+        <label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="hb-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === email ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}</select></label>
+      </div>` : ""}
+    </section>
+
+    <section class="kpiGrid wide">
+      ${kpiCard("Saldo pendiente", balText, "cargos menos horas repuestas", balTone)}
+      ${kpiCard("Movimientos", String(entries.length), "en el historial", "")}
+    </section>
+
+    ${admin ? `<section class="filtersBar card"><button class="btnPrimary btnSmall" type="button" id="hb-add">+ Registrar movimiento</button></section>` : ""}
+
+    <section class="card cfgCard">
+      <h3 class="sectionH">Historial de movimientos</h3>
+      ${rowsDesc.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Movimiento</th><th>Horas</th><th>Concepto</th><th>Saldo</th><th>Registró</th>${admin ? "<th>Acciones</th>" : ""}</tr></thead>
+        <tbody>${rowsDesc.map(({ e, saldo }) => `<tr>
+          <td data-label="Fecha">${escapeHtml(e.date || "")}</td>
+          <td data-label="Movimiento">${e.kind === "cargo" ? `<span class="badgeChip warn">Pendiente</span>` : `<span class="badgeChip ok">Repuesta</span>`}</td>
+          <td data-label="Horas">${e.kind === "cargo" ? "+" : "−"}${minutesToHhmm(e.hours * 60)}</td>
+          <td data-label="Concepto">${escapeHtml(e.note || "")}</td>
+          <td data-label="Saldo">${minutesToHhmm(saldo)}</td>
+          <td data-label="Registró">${escapeHtml(getProfileName(e.createdBy) || e.createdBy || "")}</td>
+          ${admin ? `<td data-label="Acciones"><div class="tableActions">
+            <button class="btnGhost btnSmall" type="button" data-hb-edit="${escapeHtml(e.id)}">Editar</button>
+            <button class="btnGhost btnSmall danger" type="button" data-hb-del="${escapeHtml(e.id)}">Eliminar</button>
+          </div></td>` : ""}
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay movimientos en la bolsa de horas.</div>`}
+    </section>
+  `);
+
+  $("#hb-member")?.addEventListener("change", (ev) => { BOLSA_EMAIL = ev.target.value; renderHoursBankTab(); });
+  $("#hb-add")?.addEventListener("click", () => openHoursEntryModal(email));
+  $$("[data-hb-edit]", panel()).forEach((btn) => btn.addEventListener("click", () => openHoursEntryModal(email, HOURS_BANK[btn.dataset.hbEdit])));
+  $$("[data-hb-del]", panel()).forEach((btn) => btn.addEventListener("click", () => deleteHoursEntry(btn.dataset.hbDel)));
+}
+
+function openHoursEntryModal(email, existing = null) {
+  if (!isCurrentUserAdmin()) { toast("Sección solo para administradores.", { kind: "warn" }); return; }
+  const editing = Boolean(existing?.id);
+  const name = getProfileName(email);
+  const kind = existing?.kind || "cargo";
+  openModal(editing ? "Editar movimiento" : "Registrar movimiento", name, "Bolsa de horas", `
+    <p class="modalNote">Anota lo que queda pendiente por reponer o registra las horas que ya se repusieron. El saldo se ajusta solo.</p>
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Fecha</span><input type="date" id="hb-date" class="input" value="${escapeHtml(existing?.date || todayBogota())}"></label>
+      <label class="field"><span class="fieldLabel">Tipo</span>
+        <select id="hb-kind" class="input">
+          <option value="cargo" ${kind === "cargo" ? "selected" : ""}>Queda pendiente por reponer</option>
+          <option value="abono" ${kind === "abono" ? "selected" : ""}>Repuso / cumplió horas</option>
+        </select></label>
+      <label class="field"><span class="fieldLabel">Horas</span><input type="number" id="hb-hours" class="input" min="0" max="60" step="0.5" value="${existing ? existing.hours : ""}" placeholder="Ej: 2.5"></label>
+    </div>
+    <label class="field"><span class="fieldLabel">Concepto / nota</span><input type="text" id="hb-note" class="input" value="${escapeHtml(existing?.note || "")}" placeholder="Ej: permiso, salió a las 3pm; repone la otra semana"></label>
+    <div class="modalActions"><button class="btnGhost" type="button" id="hb-cancel">Cancelar</button><button class="btnPrimary" type="button" id="hb-save">${editing ? "Guardar cambios" : "Registrar"}</button></div>
+  `);
+  $("#hb-cancel").addEventListener("click", closeModal);
+  $("#hb-save").addEventListener("click", () => {
+    const date = $("#hb-date").value;
+    const kindVal = $("#hb-kind").value === "abono" ? "abono" : "cargo";
+    const hours = Number($("#hb-hours").value);
+    const note = $("#hb-note").value.trim();
+    if (!date) { toast("Indica la fecha del movimiento.", { kind: "warn" }); return; }
+    if (!(hours > 0)) { toast("Indica un número de horas mayor a 0.", { kind: "warn" }); return; }
+    saveHoursEntry(email, existing?.id || null, { date, kind: kindVal, hours, note });
+  });
+}
+
+async function saveHoursEntry(email, id, { date, kind, hours, note }) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  const entryId = id || `${safeEmailId(email)}_${Date.now()}`;
+  const createdAtClient = id ? (HOURS_BANK[id]?.createdAtClient || Date.now()) : Date.now();
+  const payload = {
+    email, date, kind, hours, note,
+    createdBy: id ? (HOURS_BANK[id]?.createdBy || ACTIVE_EMAIL) : ACTIVE_EMAIL,
+    createdAtClient,
+    updatedAt: serverTimestamp(), updatedAtClient: Date.now(), updatedBy: ACTIVE_EMAIL
+  };
+  try {
+    await setDoc(doc(DB, COLLECTIONS.hoursBank, entryId), { ...payload, createdAt: serverTimestamp() }, { merge: true });
+    HOURS_BANK[entryId] = normalizeHoursEntry(entryId, payload);
+    toast(id ? "Movimiento actualizado" : "Movimiento registrado", { kind: "ok" });
+    await closeModal();
+    renderHoursBankTab();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar el movimiento.", { kind: "warn" });
+  }
+}
+
+async function deleteHoursEntry(id) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  const entry = HOURS_BANK[id];
+  if (!entry) { toast("No se encontró el movimiento.", { kind: "warn" }); return; }
+  if (!confirm(`Eliminar el movimiento del ${entry.date} (${entry.kind === "cargo" ? "pendiente" : "repuesta"} ${minutesToHhmm(entry.hours * 60)})?`)) return;
+  try {
+    await deleteDoc(doc(DB, COLLECTIONS.hoursBank, id));
+    delete HOURS_BANK[id];
+    toast("Movimiento eliminado", { kind: "ok" });
+    renderHoursBankTab();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo eliminar el movimiento.", { kind: "warn" });
   }
 }
 
@@ -3222,7 +3398,7 @@ async function mount() {
   onAuthStateChanged(auth, async (user) => {
     if (!user) {
       ACTIVE_USER = null; ACTIVE_EMAIL = ""; ACTIVE_PROFILE = null; ACTIVE_LINKS = {};
-      MEMBER_SETTINGS = {}; SCHEDULE_OVERRIDES = {}; DATA_LOADED = false;
+      MEMBER_SETTINGS = {}; SCHEDULE_OVERRIDES = {}; HOURS_BANK = {}; DATA_LOADED = false;
       await closeModal(); show("login"); return;
     }
     const email = emailKey(user);

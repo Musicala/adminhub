@@ -166,6 +166,14 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ===== Bolsa de horas (permisos por reponer) =====
+    match /adminHoursBank/{entryId} {
+      // El miembro ve su propia bolsa; solo admins registran/editan/eliminan.
+      allow read: if isAdmin() || readsOwnResource();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
     // ===== Datos aislados de Manager Musicala =====
     match /apps/manager-musicala {
       allow read, write: if false;
