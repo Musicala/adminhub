@@ -1877,6 +1877,15 @@ textarea.input{ resize:vertical; font-family:inherit; }
   font-weight:850;
   background:rgba(11,16,32,.03);
 }
+button.weekStatus{
+  width:100%;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+}
+.weekStatus.editable{ cursor:pointer; }
+.weekStatus.editable:hover{ filter:brightness(0.97); }
+.weekStatus.manual{ border-style:dashed; }
 .weekStatus .weekStatusLabel{ font-weight:900; }
 .weekStatus .weekStatusHours{ color:var(--muted); font-weight:800; }
 .weekStatus .weekStatusShared{

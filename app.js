@@ -162,6 +162,7 @@ import {
   getFirestore,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -516,6 +517,7 @@ function normalizeSettings(data) {
     defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
     weeklyTargetHours: Number.isFinite(data?.weeklyTargetHours) && data.weeklyTargetHours > 0 ? data.weeklyTargetHours : DEFAULT_WEEKLY_TARGET_HOURS,
     weeklyTargets: normalizeWeeklyTargets(data?.weeklyTargets),
+    weekTargetOverrides: normalizeWeekTargetOverrides(data?.weekTargetOverrides),
     weeklySchedule: weekly,
     updatedAtClient: data?.updatedAtClient || null,
     updatedBy: data?.updatedBy || ""
@@ -535,6 +537,24 @@ function normalizeWeeklyTargets(raw) {
     .filter((e) => e.hours != null);
   out.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
   return out;
+}
+
+/* Metas manuales por semana concreta: { "YYYY-MM-DD"(lunes): horas }. Tienen
+   prioridad absoluta sobre la meta fechada y sobre el descuento automático de
+   festivos. Se usan cuando una semana con festivo se redistribuye a la mano. */
+function normalizeWeekTargetOverrides(raw) {
+  const out = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw)) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k) && Number(v) > 0) out[k] = Number(v);
+    }
+  }
+  return out;
+}
+
+function weekTargetOverrideMinutes(email, monday) {
+  const v = MEMBER_SETTINGS[email]?.weekTargetOverrides?.[monday];
+  return Number(v) > 0 ? Math.round(Number(v) * 60) : null;
 }
 
 /* Meta de minutos semanales vigente para una fecha dada (se pasa el lunes de la semana). */
@@ -1293,7 +1313,8 @@ function annualCalendarStats(email, year) {
     if (fullTarget <= 0) continue;
     const wk = weekEffectiveStats(email, monday);
     if (wk.minutes <= 0) continue; // semana sin jornada trabajada: no se cuenta
-    const adjTarget = Math.max(0, fullTarget - wk.reduction); // resta festivos/descansos
+    const override = weekTargetOverrideMinutes(email, monday);
+    const adjTarget = override != null ? override : Math.max(0, fullTarget - wk.reduction); // manual > festivos
     scheduledWeeks++;
     if (wk.minutes < adjTarget) incompleteWeeks++;
   }
@@ -1341,15 +1362,18 @@ function renderWeekStatus(email, mondayDate, renderedMonthKey) {
   const fullTarget = weeklyTargetMinutesForDate(email, mondayDate);
   if (fullTarget <= 0) return "";
   const { minutes, months, reduction, restDays } = weekEffectiveStats(email, mondayDate);
-  if (minutes <= 0 && reduction <= 0) return ""; // semana sin jornada ni festivos: sin barra
-  const targetMin = Math.max(0, fullTarget - reduction); // meta ajustada por festivos/descansos
+  const override = weekTargetOverrideMinutes(email, mondayDate);
+  if (minutes <= 0 && reduction <= 0 && override == null) return ""; // sin jornada ni festivos: sin barra
+  const manual = override != null;
+  const targetMin = manual ? override : Math.max(0, fullTarget - reduction); // manual > automático
   const diff = minutes - targetMin;
-  const shared = months.length > 1;
   const notes = [];
-  if (reduction > 0) {
+  if (manual) {
+    notes.push(`<em class="weekStatusShared" title="Meta fijada a mano para esta semana. Clic para cambiarla.">meta manual</em>`);
+  } else if (reduction > 0) {
     notes.push(`<em class="weekStatusShared" title="La meta baja por ${restDays} día(s) festivo o libre: no se exigen esas horas">meta ${minutesToHhmm(fullTarget)} − ${minutesToHhmm(reduction)} festivo/libre</em>`);
   }
-  if (shared) {
+  if (months.length > 1) {
     notes.push(`<em class="weekStatusShared" title="Esta semana pertenece a dos meses; las horas se cuentan completas">${months.map((m) => escapeHtml(MONTH_NAMES[Number(m.slice(5, 7)) - 1])).join(" · ")}</em>`);
   }
   let tone, label;
@@ -1360,11 +1384,14 @@ function renderWeekStatus(email, mondayDate, renderedMonthKey) {
     tone = "warn";
     label = `Faltan ${minutesToHhmm(-diff)}`;
   }
-  return `<div class="weekStatus ${tone}">
+  const admin = isCurrentUserAdmin();
+  const tag = admin ? "button" : "div";
+  const attrs = admin ? ` type="button" data-week-monday="${mondayDate}" title="Clic para fijar la meta manual de esta semana"` : "";
+  return `<${tag} class="weekStatus ${tone}${manual ? " manual" : ""}${admin ? " editable" : ""}"${attrs}>
     <span class="weekStatusLabel">${label}</span>
     <span class="weekStatusHours">${minutesToHhmm(minutes)} / ${minutesToHhmm(targetMin)}</span>
     ${notes.join("")}
-  </div>`;
+  </${tag}>`;
 }
 
 function renderCalendarMonth(email, year, month) {
@@ -1488,6 +1515,7 @@ async function renderAnnualCalendarTab() {
     renderAnnualCalendarTab();
   });
   $$(".annualDay[data-date]", panel()).forEach((btn) => btn.addEventListener("click", () => openCalendarDayDetail(activeMember.email, btn.dataset.date)));
+  $$(".weekStatus[data-week-monday]", panel()).forEach((btn) => btn.addEventListener("click", () => openWeekTargetModal(activeMember.email, btn.dataset.weekMonday)));
 }
 
 function openCalendarDayDetail(email, date) {
@@ -1512,6 +1540,61 @@ function openCalendarDayDetail(email, date) {
     ${isCurrentUserAdmin() ? `<div class="modalActions"><button class="btnPrimary" type="button" id="btn-edit-day-schedule">Editar este día</button></div>` : ""}
   `);
   $("#btn-edit-day-schedule")?.addEventListener("click", () => openOverrideModalV2(email, getScheduleOverride(email, date) || { date, ...schedule, enabled: true }));
+}
+
+function openWeekTargetModal(email, monday) {
+  if (!isCurrentUserAdmin()) { toast("Sección solo para administradores.", { kind: "warn" }); return; }
+  const sunday = addDaysStr(monday, 6);
+  const name = getProfileName(email);
+  const fullTarget = weeklyTargetMinutesForDate(email, monday);
+  const { minutes, reduction } = weekEffectiveStats(email, monday);
+  const autoTarget = Math.max(0, fullTarget - reduction);
+  const current = weekTargetOverrideMinutes(email, monday);
+  const currentHours = current != null ? String(current / 60) : "";
+  openModal("Meta manual de la semana", name, `${monday} al ${sunday}`, `
+    <p class="modalNote">Fija las horas exactas que debe cumplir esta semana. Úsalo cuando por un festivo la jornada se redistribuye (por ejemplo a 40h). Si lo dejas vacío, se usa la meta automática (${minutesToHhmm(autoTarget)}${reduction > 0 ? `, ya con ${minutesToHhmm(reduction)} de festivo/libre descontados` : ""}).</p>
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Horas de esta semana</span><input type="number" id="wt-hours" class="input" min="0" max="60" step="0.5" value="${escapeHtml(currentHours)}" placeholder="${autoTarget / 60}"></label>
+    </div>
+    <p class="modalNote">Horas ya programadas esta semana: <strong>${minutesToHhmm(minutes)}</strong>.</p>
+    <div class="modalActions">
+      ${current != null ? `<button class="btnGhost danger" type="button" id="wt-clear">Quitar meta manual</button>` : ""}
+      <button class="btnGhost" type="button" id="wt-cancel">Cancelar</button>
+      <button class="btnPrimary" type="button" id="wt-save">Guardar</button>
+    </div>
+  `);
+  $("#wt-cancel").addEventListener("click", closeModal);
+  $("#wt-clear")?.addEventListener("click", () => saveWeekTargetOverride(email, monday, null));
+  $("#wt-save").addEventListener("click", () => {
+    const raw = $("#wt-hours").value.trim();
+    if (raw === "") { saveWeekTargetOverride(email, monday, null); return; }
+    const h = Number(raw);
+    if (!(h > 0)) { toast("Ingresa un número de horas válido o déjalo vacío para usar la meta automática.", { kind: "warn" }); return; }
+    saveWeekTargetOverride(email, monday, h);
+  });
+}
+
+async function saveWeekTargetOverride(email, monday, hours) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  try {
+    const ref = doc(DB, COLLECTIONS.memberSettings, safeEmailId(email));
+    const current = MEMBER_SETTINGS[email] || defaultSettingsFor(email, { seeded: true });
+    const map = { ...(current.weekTargetOverrides || {}) };
+    if (hours == null) {
+      delete map[monday];
+      await updateDoc(ref, { [`weekTargetOverrides.${monday}`]: deleteField(), updatedAt: serverTimestamp(), updatedAtClient: Date.now(), updatedBy: ACTIVE_EMAIL });
+    } else {
+      map[monday] = hours;
+      await setDoc(ref, { weekTargetOverrides: { [monday]: hours }, updatedAt: serverTimestamp(), updatedAtClient: Date.now(), updatedBy: ACTIVE_EMAIL }, { merge: true });
+    }
+    MEMBER_SETTINGS[email] = { ...current, weekTargetOverrides: map };
+    toast(hours == null ? "Meta manual quitada" : "Meta manual guardada", { kind: "ok" });
+    await closeModal();
+    renderAnnualCalendarTab();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la meta.", { kind: "warn" });
+  }
 }
 
 function renderQuickLinksSection() {
@@ -2796,6 +2879,7 @@ async function saveMemberSettings() {
     defaultGraceMinutes: Number($("#m-grace").value) || 0,
     weeklyTargetHours: baselineTarget,
     weeklyTargets,
+    weekTargetOverrides: MEMBER_SETTINGS[CONFIG_EMAIL]?.weekTargetOverrides || {},
     weeklySchedule: weekly,
     updatedAt: serverTimestamp(),
     updatedAtClient: Date.now(),
