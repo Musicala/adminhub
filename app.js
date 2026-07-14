@@ -1289,24 +1289,39 @@ function annualCalendarStats(email, year) {
   for (let guard = 0; guard < 60; guard++, monday = addDaysStr(monday, 7)) {
     if (monday.slice(0, 4) > String(year)) break;
     if (monday.slice(0, 4) !== String(year)) continue; // atribuir la semana al año de su lunes
-    const targetMin = weeklyTargetMinutesForDate(email, monday);
-    if (targetMin <= 0) continue;
+    const fullTarget = weeklyTargetMinutesForDate(email, monday);
+    if (fullTarget <= 0) continue;
     const wk = weekEffectiveStats(email, monday);
-    if (wk.minutes <= 0) continue; // semana sin jornada programada: no se cuenta
+    if (wk.minutes <= 0) continue; // semana sin jornada trabajada: no se cuenta
+    const adjTarget = Math.max(0, fullTarget - wk.reduction); // resta festivos/descansos
     scheduledWeeks++;
-    if (wk.minutes < targetMin) incompleteWeeks++;
+    if (wk.minutes < adjTarget) incompleteWeeks++;
   }
   // Meta vigente al cierre del año, solo para el texto del KPI.
   const targetMin = weeklyTargetMinutesForDate(email, `${year}-12-31`);
   return { workDays, freeDays, effectiveMinutes, lunchDays, overrideDays, incompleteWeeks, scheduledWeeks, targetMin };
 }
 
+/* Horas efectivas que el horario SEMANAL base asigna a un día (ignora excepciones
+   y festivos). Sirve para saber cuánto se descuenta de la meta si ese día cae libre. */
+function weeklyScheduleBaselineMinutes(email, date) {
+  const settings = MEMBER_SETTINGS[email];
+  if (!settings || settings.active === false) return 0;
+  const day = settings.weeklySchedule?.[weekdayKeyForDate(date)];
+  if (!day || !day.enabled) return 0;
+  return effectiveShiftMinutes(day);
+}
+
 /* Horas efectivas de una semana real (Lun–Sáb) a partir del lunes que la inicia.
    Recorre las 6 fechas reales aunque caigan en otro mes: así una semana que
-   pertenece a dos meses se calcula completa desde cualquiera de los dos. */
+   pertenece a dos meses se calcula completa desde cualquiera de los dos.
+   `reduction` = horas de días que normalmente se trabajan pero caen libres por
+   festivo o excepción; se restan de la meta para no exigir horas que no aplican. */
 function weekEffectiveStats(email, mondayDate) {
   let minutes = 0;
   let workedDays = 0;
+  let reduction = 0;
+  let restDays = 0;
   const months = new Set();
   for (let d = 0; d < 7; d++) {
     const date = addDaysStr(mondayDate, d);
@@ -1314,27 +1329,33 @@ function weekEffectiveStats(email, mondayDate) {
     if (d === 6) continue; // domingo no cuenta para la jornada legal
     const schedule = getCalendarDayForDate(email, date).schedule;
     const eff = effectiveShiftMinutes(schedule);
-    if (eff > 0) { minutes += eff; workedDays++; }
+    if (eff > 0) { minutes += eff; workedDays++; continue; }
+    // Día libre: si normalmente se trabajaba (festivo/excepción), descuenta su meta.
+    const baseline = weeklyScheduleBaselineMinutes(email, date);
+    if (baseline > 0) { reduction += baseline; restDays++; }
   }
-  return { minutes, workedDays, months: [...months] };
+  return { minutes, workedDays, reduction, restDays, months: [...months] };
 }
 
 function renderWeekStatus(email, mondayDate, renderedMonthKey) {
-  const targetMin = weeklyTargetMinutesForDate(email, mondayDate);
-  if (targetMin <= 0) return "";
-  const { minutes, months } = weekEffectiveStats(email, mondayDate);
+  const fullTarget = weeklyTargetMinutesForDate(email, mondayDate);
+  if (fullTarget <= 0) return "";
+  const { minutes, months, reduction, restDays } = weekEffectiveStats(email, mondayDate);
+  if (minutes <= 0 && reduction <= 0) return ""; // semana sin jornada ni festivos: sin barra
+  const targetMin = Math.max(0, fullTarget - reduction); // meta ajustada por festivos/descansos
   const diff = minutes - targetMin;
   const shared = months.length > 1;
-  // Aviso cuando la semana se reparte entre dos meses: sus horas se cuentan completas.
-  const sharedNote = shared
-    ? `<em class="weekStatusShared" title="Esta semana pertenece a dos meses; las horas se cuentan completas">${months.map((m) => escapeHtml(MONTH_NAMES[Number(m.slice(5, 7)) - 1])).join(" · ")}</em>`
-    : "";
+  const notes = [];
+  if (reduction > 0) {
+    notes.push(`<em class="weekStatusShared" title="La meta baja por ${restDays} día(s) festivo o libre: no se exigen esas horas">meta ${minutesToHhmm(fullTarget)} − ${minutesToHhmm(reduction)} festivo/libre</em>`);
+  }
+  if (shared) {
+    notes.push(`<em class="weekStatusShared" title="Esta semana pertenece a dos meses; las horas se cuentan completas">${months.map((m) => escapeHtml(MONTH_NAMES[Number(m.slice(5, 7)) - 1])).join(" · ")}</em>`);
+  }
   let tone, label;
   if (diff >= 0) {
     tone = diff === 0 ? "ok" : "over";
-    label = diff === 0
-      ? `Semana completa`
-      : `Completa · +${minutesToHhmm(diff)}`;
+    label = diff === 0 ? `Semana completa` : `Completa · +${minutesToHhmm(diff)}`;
   } else {
     tone = "warn";
     label = `Faltan ${minutesToHhmm(-diff)}`;
@@ -1342,7 +1363,7 @@ function renderWeekStatus(email, mondayDate, renderedMonthKey) {
   return `<div class="weekStatus ${tone}">
     <span class="weekStatusLabel">${label}</span>
     <span class="weekStatusHours">${minutesToHhmm(minutes)} / ${minutesToHhmm(targetMin)}</span>
-    ${sharedNote}
+    ${notes.join("")}
   </div>`;
 }
 
@@ -1418,7 +1439,7 @@ async function renderAnnualCalendarTab() {
       <div>
         <p class="dashEyebrow">Jornadas de trabajo</p>
         <h2 class="dashTitle">Horario anual de ${escapeHtml(activeMember.name)}</h2>
-        <p class="dashSub">Horas efectivas (jornadas &gt;6h descuentan 1h de almuerzo). Cada semana Lun–Sáb indica si cumple la meta configurada; las semanas repartidas en dos meses se cuentan completas.</p>
+        <p class="dashSub">Horas efectivas (jornadas &gt;6h descuentan 1h de almuerzo). Cada semana Lun–Sáb indica si cumple la meta; los festivos y días libres reducen la meta de esa semana y las semanas en dos meses se cuentan completas.</p>
       </div>
       <div class="headActions">
         ${isCurrentUserAdmin() ? `<label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="cal-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === activeMember.email ? "selected" : ""}>${escapeHtml(m.name)}${isAdminEmail(m.email) ? " (admin)" : ""}</option>`).join("")}</select></label>` : ""}
