@@ -515,10 +515,41 @@ function normalizeSettings(data) {
     canWorkRemote: Boolean(data?.canWorkRemote),
     defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
     weeklyTargetHours: Number.isFinite(data?.weeklyTargetHours) && data.weeklyTargetHours > 0 ? data.weeklyTargetHours : DEFAULT_WEEKLY_TARGET_HOURS,
+    weeklyTargets: normalizeWeeklyTargets(data?.weeklyTargets),
     weeklySchedule: weekly,
     updatedAtClient: data?.updatedAtClient || null,
     updatedBy: data?.updatedBy || ""
   };
+}
+
+/* Metas de horas semanales fechadas: [{ from: "YYYY-MM-DD", hours }].
+   La entrada sin fecha (o la más antigua) aplica desde el inicio; cada cambio
+   aplica desde su fecha en adelante. Permite p.ej. 44h y luego 42h desde una fecha. */
+function normalizeWeeklyTargets(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = raw
+    .map((e) => ({
+      from: typeof e?.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(e.from) ? e.from : "",
+      hours: Number(e?.hours) > 0 ? Number(e.hours) : null
+    }))
+    .filter((e) => e.hours != null);
+  out.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
+  return out;
+}
+
+/* Meta de minutos semanales vigente para una fecha dada (se pasa el lunes de la semana). */
+function weeklyTargetMinutesForDate(email, date) {
+  const s = MEMBER_SETTINGS[email];
+  const list = s?.weeklyTargets;
+  let hours;
+  if (Array.isArray(list) && list.length) {
+    let pick = list[0];
+    for (const e of list) { if (!e.from || e.from <= date) pick = e; else break; }
+    hours = pick.hours;
+  } else {
+    hours = s?.weeklyTargetHours ?? DEFAULT_WEEKLY_TARGET_HOURS;
+  }
+  return Math.round((Number(hours) || 0) * 60);
 }
 
 function getActiveMemberSettings() {
@@ -1249,23 +1280,24 @@ function annualCalendarStats(email, year) {
     }
   }
   // Semanas incompletas: recorre semanas Lun–Dom cuyo lunes cae en el año.
-  const targetHours = MEMBER_SETTINGS[email]?.weeklyTargetHours ?? DEFAULT_WEEKLY_TARGET_HOURS;
-  const targetMin = Math.round((Number(targetHours) || 0) * 60);
+  // La meta se evalúa por semana, respetando cambios de jornada fechados.
   let incompleteWeeks = 0;
   let scheduledWeeks = 0;
-  if (targetMin > 0) {
-    const jan1 = `${year}-01-01`;
-    const jan1Dow = (parseLocalDateInput(jan1).getDay() + 6) % 7; // 0 = lunes
-    let monday = addDaysStr(jan1, -jan1Dow);
-    for (let guard = 0; guard < 60; guard++, monday = addDaysStr(monday, 7)) {
-      if (monday.slice(0, 4) > String(year)) break;
-      if (monday.slice(0, 4) !== String(year)) continue; // atribuir la semana al año de su lunes
-      const wk = weekEffectiveStats(email, monday);
-      if (wk.minutes <= 0) continue; // semana sin jornada programada: no se cuenta
-      scheduledWeeks++;
-      if (wk.minutes < targetMin) incompleteWeeks++;
-    }
+  const jan1 = `${year}-01-01`;
+  const jan1Dow = (parseLocalDateInput(jan1).getDay() + 6) % 7; // 0 = lunes
+  let monday = addDaysStr(jan1, -jan1Dow);
+  for (let guard = 0; guard < 60; guard++, monday = addDaysStr(monday, 7)) {
+    if (monday.slice(0, 4) > String(year)) break;
+    if (monday.slice(0, 4) !== String(year)) continue; // atribuir la semana al año de su lunes
+    const targetMin = weeklyTargetMinutesForDate(email, monday);
+    if (targetMin <= 0) continue;
+    const wk = weekEffectiveStats(email, monday);
+    if (wk.minutes <= 0) continue; // semana sin jornada programada: no se cuenta
+    scheduledWeeks++;
+    if (wk.minutes < targetMin) incompleteWeeks++;
   }
+  // Meta vigente al cierre del año, solo para el texto del KPI.
+  const targetMin = weeklyTargetMinutesForDate(email, `${year}-12-31`);
   return { workDays, freeDays, effectiveMinutes, lunchDays, overrideDays, incompleteWeeks, scheduledWeeks, targetMin };
 }
 
@@ -1288,8 +1320,7 @@ function weekEffectiveStats(email, mondayDate) {
 }
 
 function renderWeekStatus(email, mondayDate, renderedMonthKey) {
-  const targetHours = MEMBER_SETTINGS[email]?.weeklyTargetHours ?? DEFAULT_WEEKLY_TARGET_HOURS;
-  const targetMin = Math.round((Number(targetHours) || 0) * 60);
+  const targetMin = weeklyTargetMinutesForDate(email, mondayDate);
   if (targetMin <= 0) return "";
   const { minutes, months } = weekEffectiveStats(email, mondayDate);
   const diff = minutes - targetMin;
@@ -1399,7 +1430,7 @@ async function renderAnnualCalendarTab() {
       ${kpiCard("Horas efectivas", minutesToHhmm(stats.effectiveMinutes), "almuerzo ya descontado", "info")}
       ${kpiCard("Días con jornada", stats.workDays, "en el año seleccionado", "ok")}
       ${kpiCard("Días sin jornada", stats.freeDays, "incluye descansos y festivos", "")}
-      ${kpiCard("Semanas incompletas", stats.incompleteWeeks, `de ${stats.scheduledWeeks} con jornada · meta ${minutesToHhmm(stats.targetMin)}/sem`, stats.incompleteWeeks ? "warn" : "ok")}
+      ${kpiCard("Semanas incompletas", stats.incompleteWeeks, `de ${stats.scheduledWeeks} con jornada · meta vigente ${minutesToHhmm(stats.targetMin)}/sem`, stats.incompleteWeeks ? "warn" : "ok")}
       ${kpiCard("Excepciones", stats.overrideDays, "cambios por fecha", stats.overrideDays ? "info" : "")}
     </section>
 
@@ -2577,6 +2608,16 @@ async function renderConfigTab() {
 let CONFIG_EMAIL = "";
 let OVERRIDES_FILTER = "upcoming";
 
+function targetRowHtml(t) {
+  const from = t?.from || "";
+  const hours = Number.isFinite(t?.hours) ? t.hours : DEFAULT_WEEKLY_TARGET_HOURS;
+  return `<div class="targetRow" data-target-row>
+    <label class="field mini"><span class="fieldLabel">Desde (opcional)</span><input type="date" class="input tgt-from" value="${escapeHtml(from)}"></label>
+    <label class="field mini"><span class="fieldLabel">Horas/semana</span><input type="number" class="input tgt-hours" min="0" max="60" step="0.5" value="${hours}"></label>
+    <button class="btnGhost btnSmall danger tgt-remove" type="button" title="Quitar">✕</button>
+  </div>`;
+}
+
 function renderMemberSettings() {
   const host = $("#cfg-body");
   if (!host) return;
@@ -2613,12 +2654,20 @@ function renderMemberSettings() {
           <label class="field"><span class="fieldLabel">Rol</span>
             <select id="m-role" class="input"><option value="member" ${s.role !== "admin" ? "selected" : ""}>Miembro</option><option value="admin" ${s.role === "admin" ? "selected" : ""}>Admin</option></select></label>
           <label class="field"><span class="fieldLabel">Gracia por defecto (min)</span><input type="number" id="m-grace" class="input" min="0" max="120" value="${s.defaultGraceMinutes}"></label>
-          <label class="field"><span class="fieldLabel">Horas semanales (Lun–Sáb)</span><input type="number" id="m-weekly-target" class="input" min="0" max="60" step="0.5" value="${s.weeklyTargetHours}"></label>
         </div>
         <div class="cfgToggles">
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
           <label class="field checkField"><input type="checkbox" id="m-remote" ${s.canWorkRemote ? "checked" : ""}> <span>Puede marcar remoto</span></label>
         </div>
+      </div>
+
+      <h3 class="sectionH">Horas semanales (jornada legal)</h3>
+      <p class="modalNote">La fila sin fecha aplica desde el inicio. Cada cambio aplica desde su fecha en adelante y se toma el lunes de cada semana como referencia. Ej.: 44h sin fecha y 42h desde el 2025-07-15.</p>
+      <div class="targetRows" id="m-targets">
+        ${((s.weeklyTargets && s.weeklyTargets.length) ? s.weeklyTargets : [{ from: "", hours: s.weeklyTargetHours }]).map(targetRowHtml).join("")}
+      </div>
+      <div class="modalActions" style="justify-content:flex-start;margin-top:8px">
+        <button class="btnGhost btnSmall" type="button" id="btn-add-target">+ Agregar cambio de jornada</button>
       </div>
 
       <h3 class="sectionH">Horario semanal</h3>
@@ -2669,6 +2718,16 @@ function renderMemberSettings() {
     </section>
   `;
   $("#btn-save-settings").addEventListener("click", saveMemberSettings);
+  $("#btn-add-target")?.addEventListener("click", () => {
+    $("#m-targets")?.insertAdjacentHTML("beforeend", targetRowHtml({ from: "", hours: 42 }));
+  });
+  $("#m-targets")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tgt-remove");
+    if (!btn) return;
+    const rows = $$("[data-target-row]", $("#m-targets"));
+    if (rows.length <= 1) { toast("Debe quedar al menos una meta de horas.", { kind: "warn" }); return; }
+    btn.closest("[data-target-row]").remove();
+  });
   $$("[data-ov-filter]", host).forEach((btn) => btn.addEventListener("click", () => {
     OVERRIDES_FILTER = btn.dataset.ovFilter;
     renderMemberSettings();
@@ -2699,6 +2758,14 @@ async function saveMemberSettings() {
       notes: $(".day-notes", card).value.trim()
     };
   });
+  const weeklyTargets = [];
+  $$("[data-target-row]", host).forEach((row) => {
+    const from = $(".tgt-from", row).value;
+    const hours = Number($(".tgt-hours", row).value);
+    if (hours > 0) weeklyTargets.push({ from: from || "", hours });
+  });
+  weeklyTargets.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
+  const baselineTarget = (weeklyTargets.find((t) => !t.from) || weeklyTargets[0])?.hours || DEFAULT_WEEKLY_TARGET_HOURS;
   const payload = {
     email: CONFIG_EMAIL,
     name: $("#m-name").value.trim(),
@@ -2706,7 +2773,8 @@ async function saveMemberSettings() {
     active: $("#m-active").checked,
     canWorkRemote: $("#m-remote").checked,
     defaultGraceMinutes: Number($("#m-grace").value) || 0,
-    weeklyTargetHours: Number($("#m-weekly-target").value) || DEFAULT_WEEKLY_TARGET_HOURS,
+    weeklyTargetHours: baselineTarget,
+    weeklyTargets,
     weeklySchedule: weekly,
     updatedAt: serverTimestamp(),
     updatedAtClient: Date.now(),

@@ -1848,6 +1848,22 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .annualWeekdays{
   margin-bottom:6px;
 }
+.targetRows{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.targetRow{
+  display:flex;
+  align-items:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.targetRow .tgt-remove{
+  flex:0 0 auto;
+  align-self:flex-end;
+  margin-bottom:2px;
+}
 .weekStatus{
   display:flex;
   align-items:center;
