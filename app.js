@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-14.2";
+const BUILD = "2026-07-14.3";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -2761,6 +2761,7 @@ function renderStatsUI() {
         <p class="dashSub">${escapeHtml(formatLongDate(r.from))} → ${escapeHtml(formatLongDate(r.to))}</p>
       </div>
       <div class="headActions">
+        <button class="btnPrimary btnSmall" type="button" id="btn-present-stats">Presentar datos</button>
         <button class="btnGhost btnSmall" type="button" id="btn-copy-summary">Copiar resumen</button>
         <button class="btnGhost btnSmall" type="button" id="btn-copy-report">Copiar reporte</button>
       </div>
@@ -2916,6 +2917,7 @@ function renderStatsUI() {
   $$("[data-fix-late]").forEach((button) => button.addEventListener("click", () => openEditRecordModal(button.dataset.fixLate)));
   $$("[data-create-missing]").forEach((button) => button.addEventListener("click", () => openCreateMissingRecordModal(button.dataset.createMissing, button.dataset.date)));
   wireStatsControls();
+  $("#btn-present-stats")?.addEventListener("click", () => openStatsPresentationPicker(stats, r));
   $("#btn-copy-summary").addEventListener("click", () => copyStatsSummary(stats, r));
   $("#btn-copy-report").addEventListener("click", () => copyStatsReport(stats, r, bestMembers));
 }
@@ -2929,6 +2931,82 @@ function maxPct(v, max) { return max ? Math.round((v / max) * 100) : 0; }
 function barHtml(pct, tone) { return `<div class="bar"><div class="barFill ${tone}" style="width:${Math.max(3, Math.min(100, pct))}%"></div></div>`; }
 function rankRow(pos, name, value, bar) {
   return `<div class="rankRow"><span class="rankPos">${pos}</span><div class="rankBody"><div class="rankTop"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>${bar}</div></div>`;
+}
+
+const STATS_PRESENTATION_OPTIONS = [
+  ["kpis", "Indicadores principales", "Puntualidad, jornadas esperadas y llegadas tarde."],
+  ["late", "Detalle de tardanzas", "Fechas, hora programada, llegada y retraso."],
+  ["missing", "Jornadas sin registro", "Jornadas programadas que no tienen marcación."],
+  ["monthly", "Días trabajados por mes", "Registro frente a jornadas programadas."],
+  ["members", "Resumen por miembro", "Comparativo de puntualidad del equipo."],
+  ["daily", "Impacto diario", "Vista administrativa de la jornada por fecha."],
+  ["incidents", "Días con incidencias", "Días que concentraron tardanzas o ausencias."]
+];
+
+function openStatsPresentationPicker(stats, range) {
+  openModal("Preparar presentación", "Elige exactamente qué información se mostrará en pantalla completa.", "Vista para reunión", `
+    <div class="presentationPicker">
+      ${STATS_PRESENTATION_OPTIONS.map(([id, title, description], index) => `<label class="presentationOption">
+        <input type="checkbox" value="${id}" ${index < 3 ? "checked" : ""}>
+        <span><strong>${title}</strong><small>${description}</small></span>
+      </label>`).join("")}
+    </div>
+    <div class="modalActions">
+      <button class="btnGhost" type="button" id="btn-cancel-presentation">Cancelar</button>
+      <button class="btnPrimary" type="button" id="btn-start-presentation">Ver en pantalla completa</button>
+    </div>
+  `);
+  $("#btn-cancel-presentation")?.addEventListener("click", closeModal);
+  $("#btn-start-presentation")?.addEventListener("click", async () => {
+    const selected = $$(".presentationOption input:checked").map((input) => input.value);
+    if (!selected.length) { toast("Elige al menos un bloque para la presentación.", { kind: "warn" }); return; }
+    await closeModal();
+    openStatsPresentation(stats, range, selected);
+  });
+}
+
+function openStatsPresentation(stats, range, selected) {
+  closeStatsPresentation();
+  const g = stats.global;
+  const selectedSet = new Set(selected);
+  const section = (key, title, content) => selectedSet.has(key) ? `<section class="presentationSection"><h3>${title}</h3>${content}</section>` : "";
+  const table = (head, body, empty) => body ? `<div class="tableWrap"><table class="dataTable"><thead>${head}</thead><tbody>${body}</tbody></table></div>` : `<div class="emptyState">${empty}</div>`;
+  const host = document.createElement("section");
+  host.id = "stats-presentation";
+  host.className = "statsPresentation";
+  host.innerHTML = `
+    <header class="presentationHead">
+      <div><p>Musicala · Reunión de seguimiento</p><h2>Estadísticas de puntualidad</h2><span>${escapeHtml(formatLongDate(range.from))} → ${escapeHtml(formatLongDate(range.to))}</span></div>
+      <button class="btnGhost" type="button" id="btn-close-presentation">Cerrar presentación</button>
+    </header>
+    <main class="presentationBody">
+      ${section("kpis", "Indicadores principales", `<div class="kpiGrid wide presentationKpis">
+        ${kpiCard("Puntualidad global", g.punctualityPct + "%", `${g.onTime} puntuales / ${g.late} tarde`, g.punctualityPct >= 80 ? "ok" : "warn")}
+        ${kpiCard("Jornadas esperadas", g.expectedDays, `${g.registeredDays} registradas (${g.attendancePct}%)`, "info")}
+        ${kpiCard("Llegadas tarde", g.late, g.late ? `prom. ${g.avgLateMinutes} min` : "sin tardanzas", g.late ? "late" : "ok")}
+      </div>`) }
+      ${section("late", "Detalle de tardanzas", table(`<tr><th>Fecha</th><th>Miembro</th><th>Debía llegar</th><th>Llegó</th><th>Retraso</th></tr>`, stats.lateDetails.map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.expectedStart)}</td><td>${escapeHtml(d.arrival)}</td><td>${d.lateMinutes} min</td></tr>`).join(""), "No hubo llegadas tarde en este periodo."))}
+      ${section("missing", "Jornadas programadas sin registro", table(`<tr><th>Fecha</th><th>Miembro</th><th>Horario programado</th><th>Modalidad</th></tr>`, stats.missingDetails.map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.expectedStart)} – ${escapeHtml(d.expectedEnd)}</td><td>${escapeHtml(d.modality)}</td></tr>`).join(""), "No hay jornadas programadas sin registro."))}
+      ${section("monthly", "Días trabajados por mes", table(`<tr><th>Mes</th><th>Miembro</th><th>Registrados</th><th>Programados</th><th>Asistencia</th></tr>`, stats.monthRows.map((row) => `<tr><td>${escapeHtml(monthKeyLabel(row.month))}</td><td>${escapeHtml(row.name)}</td><td>${row.worked}</td><td>${row.expected}</td><td>${row.attendancePct ?? "-"}%</td></tr>`).join(""), "Sin datos en el periodo."))}
+      ${section("members", "Resumen por miembro", table(`<tr><th>Miembro</th><th>Esperadas</th><th>Registradas</th><th>Puntuales</th><th>Tarde</th><th>Puntualidad</th></tr>`, stats.memberRows.map((m) => `<tr><td><strong>${escapeHtml(m.name)}</strong></td><td>${m.expected}</td><td>${m.registered}</td><td>${m.onTime}</td><td>${m.late}</td><td>${m.punctualityPct}%</td></tr>`).join(""), "Sin datos en el periodo."))}
+      ${section("daily", "Impacto diario sobre la jornada", table(`<tr><th>Fecha</th><th>Programado</th><th>Trabajado</th><th>Cumplimiento</th><th>Tardanzas</th><th>Impacto</th></tr>`, stats.dayRows.slice().reverse().map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${minutesToHhmm(d.expectedMinutes)}</td><td>${minutesToHhmm(d.workedMinutes)}</td><td>${d.compliancePct}%</td><td>${minutesToHhmm(d.lateMinutes)}</td><td>${minutesToHhmm(d.impactMinutes)}</td></tr>`).join(""), "Sin datos en el periodo."))}
+      ${section("incidents", "Días con más incidencias", table(`<tr><th>Fecha</th><th>Esperadas</th><th>Puntuales</th><th>Tarde</th><th>Ausentes</th><th>Incompletas</th></tr>`, stats.dayRows.slice().sort((a, b) => (b.late + b.absent) - (a.late + a.absent)).filter((d) => d.late + d.absent > 0).slice(0, 5).map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${d.expected}</td><td>${d.onTime}</td><td>${d.late}</td><td>${d.absent}</td><td>${d.incomplete}</td></tr>`).join(""), "No hay incidencias de puntualidad en el periodo."))}
+    </main>
+  `;
+  document.body.appendChild(host);
+  $("#btn-close-presentation", host)?.addEventListener("click", closeStatsPresentation);
+  document.addEventListener("fullscreenchange", onStatsPresentationFullscreenChange);
+  document.documentElement.requestFullscreen?.().catch(() => null);
+}
+
+function onStatsPresentationFullscreenChange() {
+  if (!document.fullscreenElement) closeStatsPresentation();
+}
+
+function closeStatsPresentation() {
+  document.removeEventListener("fullscreenchange", onStatsPresentationFullscreenChange);
+  $("#stats-presentation")?.remove();
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => null);
 }
 
 function wireStatsControls() {
