@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-05.1";
+const BUILD = "2026-07-14.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -1012,7 +1012,7 @@ const TABS = [
   { id: "calendario", label: "Horario anual", admin: false },
   { id: "bolsa", label: "Bolsa de horas", admin: false },
   { id: "registros", label: "Registros", admin: false },
-  { id: "stats", label: "Estadísticas", admin: true },
+  { id: "stats", label: "Estadísticas", admin: false },
   { id: "config", label: "Configuración", admin: true },
   { id: "equipo", label: "Equipo", admin: true }
 ];
@@ -1050,7 +1050,7 @@ async function goTab(tab) {
     case "calendario": return renderAnnualCalendarTab();
     case "bolsa": return renderHoursBankTab();
     case "registros": return renderRecordsTab();
-    case "stats": return renderAdminStats();
+    case "stats": return isCurrentUserAdmin() ? renderAdminStats() : renderMemberStats();
     case "config": return renderConfigTab();
     case "equipo": return renderTeamTab();
     default: return renderDashboard();
@@ -2610,7 +2610,7 @@ async function voidRecord(id, reason) {
 ========================================================================== */
 const STATS_FILTER = { preset: "month", from: "", to: "", member: "all", modality: "all", status: "all" };
 
-function presetRange(preset) {
+function presetRange(preset, filters = STATS_FILTER) {
   const today = todayBogota();
   if (preset === "today") return { from: today, to: today };
   if (preset === "week") {
@@ -2618,7 +2618,7 @@ function presetRange(preset) {
     return { from: addDaysStr(today, -idx), to: today };
   }
   if (preset === "month") return { from: today.slice(0, 8) + "01", to: today };
-  return { from: STATS_FILTER.from || today, to: STATS_FILTER.to || today };
+  return { from: filters.from || today, to: filters.to || today };
 }
 
 async function renderAdminStats() {
@@ -2632,6 +2632,115 @@ async function renderAdminStats() {
 }
 
 let STATS_RECORDS = [];
+const MEMBER_STATS_FILTER = { preset: "month", from: "", to: "" };
+
+async function renderMemberStats() {
+  setPanel(`<div class="loadingBlock">Cargando tu puntualidad…</div>`);
+  await loadAdminData({ force: true }).catch(() => {});
+  let records = [];
+  try { records = await getShiftRecords({ mineOnly: true, max: 1000 }); } catch (_) {}
+  renderMemberStatsUI(ACTIVE_EMAIL, records);
+}
+
+function renderMemberStatsUI(email, records = STATS_RECORDS, { preview = false } = {}) {
+  const member = statsMemberList().find((m) => m.email === email)
+    || { email, name: getProfileName(email) };
+  const r = presetRange(MEMBER_STATS_FILTER.preset, MEMBER_STATS_FILTER);
+  MEMBER_STATS_FILTER.from = r.from; MEMBER_STATS_FILTER.to = r.to;
+  const stats = calculateStats(records, { from: r.from, to: r.to, memberFilter: email });
+  const g = stats.global;
+  const scheduledRecords = stats.dayRows.slice().reverse().filter((d) => d.expected > 0 && d.registered > 0);
+
+  setPanel(`
+    <section class="dashHead">
+      <div>
+        <p class="dashEyebrow">${preview ? "Vista previa de asistente" : "Mi puntualidad"}</p>
+        <h2 class="dashTitle">${preview ? escapeHtml(member.name) : "Mis estadísticas de puntualidad"}</h2>
+        <p class="dashSub">${preview ? "Así verá esta sección la asistente. Solo incluye su información de puntualidad." : "Consulta tus jornadas programadas y tu puntualidad del periodo."}</p>
+      </div>
+      ${preview ? `<div class="headActions"><button class="btnGhost btnSmall" type="button" id="btn-back-admin-stats">Volver a estadísticas admin</button></div>` : ""}
+    </section>
+
+    <section class="filtersBar card">
+      <div class="segMenu" id="member-seg-preset">
+        ${[["today", "Hoy"], ["week", "Semana"], ["month", "Mes"], ["custom", "Personalizado"]].map(([v, l]) => `<button class="segBtn${MEMBER_STATS_FILTER.preset === v ? " active" : ""}" data-member-preset="${v}" type="button">${l}</button>`).join("")}
+      </div>
+      <label class="field"><span class="fieldLabel">Desde</span><input type="date" id="member-s-from" class="input" value="${escapeHtml(r.from)}" ${MEMBER_STATS_FILTER.preset !== "custom" ? "disabled" : ""}></label>
+      <label class="field"><span class="fieldLabel">Hasta</span><input type="date" id="member-s-to" class="input" value="${escapeHtml(r.to)}" ${MEMBER_STATS_FILTER.preset !== "custom" ? "disabled" : ""}></label>
+    </section>
+
+    <section class="kpiGrid wide">
+      ${kpiCard("Puntualidad global", g.punctualityPct + "%", `${g.onTime} llegó bien / ${g.late} tarde`, g.punctualityPct >= 80 ? "ok" : "warn")}
+      ${kpiCard("Jornadas esperadas", g.expectedDays, "según tu horario programado", "info")}
+      ${kpiCard("Llegadas tarde", g.late, g.late ? `prom. ${g.avgLateMinutes} min` : "sin tardanzas", g.late ? "late" : "ok")}
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">🕓 Detalle de mis tardanzas</h3>
+      <p class="sectionSub">Días en los que llegaste tarde, con la hora programada y la hora de llegada.</p>
+      ${stats.lateDetails.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Debía llegar</th><th>Marcó</th><th>Retraso</th></tr></thead>
+        <tbody>${stats.lateDetails.map((d) => `<tr>
+          <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
+          <td data-label="Debía llegar">${escapeHtml(d.expectedStart)}</td>
+          <td data-label="Marcó"><span class="badgeChip late">${escapeHtml(d.arrival)}</span></td>
+          <td data-label="Retraso">${d.lateMinutes} min</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No registras llegadas tarde en este periodo. 🎉</div>`}
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">📝 Jornadas programadas sin registro</h3>
+      <p class="sectionSub">Jornadas que estaban programadas en tu horario y no tienen marcación registrada.</p>
+      ${stats.missingDetails.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Horario programado</th><th>Modalidad</th></tr></thead>
+        <tbody>${stats.missingDetails.map((d) => `<tr>
+          <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
+          <td data-label="Horario programado">${escapeHtml(d.expectedStart)} – ${escapeHtml(d.expectedEnd)}</td>
+          <td data-label="Modalidad">${escapeHtml(d.modality)}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">No hay jornadas programadas pendientes de registro en este periodo.</div>`}
+    </section>
+
+    <section class="dashSection">
+      <h3 class="sectionH">📋 Registro de jornadas</h3>
+      <p class="sectionSub">Solo muestra el horario programado y si la llegada fue puntual o tarde.</p>
+      ${scheduledRecords.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Fecha</th><th>Horario programado</th><th>Hora de llegada</th><th>Estado</th></tr></thead>
+        <tbody>${scheduledRecords.map((d) => `<tr>
+          <td data-label="Fecha"><strong>${escapeHtml(d.date)}</strong></td>
+          <td data-label="Horario programado">${escapeHtml(memberScheduleLabel(email, d.date))}</td>
+          <td data-label="Hora de llegada">${escapeHtml(memberArrivalTime(email, d.date, records))}</td>
+          <td data-label="Estado">${memberArrivalBadge(email, d.date, records)}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="emptyState">Aún no hay jornadas registradas en este periodo.</div>`}
+    </section>
+  `);
+
+  $("#member-seg-preset")?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-member-preset]");
+    if (!b) return;
+    MEMBER_STATS_FILTER.preset = b.dataset.memberPreset;
+    renderMemberStatsUI(email, records, { preview });
+  });
+  $("#member-s-from")?.addEventListener("change", (e) => { MEMBER_STATS_FILTER.from = e.target.value; MEMBER_STATS_FILTER.preset = "custom"; renderMemberStatsUI(email, records, { preview }); });
+  $("#member-s-to")?.addEventListener("change", (e) => { MEMBER_STATS_FILTER.to = e.target.value; MEMBER_STATS_FILTER.preset = "custom"; renderMemberStatsUI(email, records, { preview }); });
+  $("#btn-back-admin-stats")?.addEventListener("click", renderStatsUI);
+}
+
+function memberScheduleLabel(email, date) {
+  const schedule = getExpectedScheduleForDate(email, date);
+  return schedule ? `${schedule.start} – ${schedule.end}` : "Sin horario programado";
+}
+
+function memberArrivalBadge(email, date, records) {
+  const record = records.find((item) => item.email === email && item.date === date);
+  const calc = calculateShiftStatus(record || {}, getExpectedScheduleForDate(email, date));
+  if (calc.isLate) return `<span class="badgeChip late">Llegó tarde</span>`;
+  if (calc.justified) return `<span class="badgeChip info">Justificado</span>`;
+  return `<span class="badgeChip ok">Llegó bien</span>`;
+}
+
+function memberArrivalTime(email, date, records) {
+  return records.find((item) => item.email === email && item.date === date)?.ingresoTime || "—";
+}
 
 function renderStatsUI() {
   if (STATS_FILTER.member !== "all" && isAdminEmail(STATS_FILTER.member)) STATS_FILTER.member = "all";
@@ -2667,6 +2776,11 @@ function renderStatsUI() {
         <select id="s-member" class="input"><option value="all">Todos</option>
           ${statMembers.map((m) => `<option value="${escapeHtml(m.email)}" ${STATS_FILTER.member === m.email ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
         </select></label>
+      <label class="field"><span class="fieldLabel">Vista como asistente</span>
+        <select id="s-preview-member" class="input">
+          ${statMembers.map((m) => `<option value="${escapeHtml(m.email)}" ${STATS_FILTER.member === m.email ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
+        </select></label>
+      <button class="btnGhost btnSmall" type="button" id="btn-preview-member">Ver su vista</button>
       <label class="field"><span class="fieldLabel">Modalidad</span>
         <select id="s-modality" class="input">
           ${[["all", "Todas"], ["sede", "Sede"], ["remoto", "Remoto"]].map(([v, l]) => `<option value="${v}" ${STATS_FILTER.modality === v ? "selected" : ""}>${l}</option>`).join("")}
@@ -2827,6 +2941,10 @@ function wireStatsControls() {
   $("#s-from")?.addEventListener("change", (e) => { STATS_FILTER.from = e.target.value; STATS_FILTER.preset = "custom"; renderStatsUI(); });
   $("#s-to")?.addEventListener("change", (e) => { STATS_FILTER.to = e.target.value; STATS_FILTER.preset = "custom"; renderStatsUI(); });
   $("#s-member")?.addEventListener("change", (e) => { STATS_FILTER.member = e.target.value; renderStatsUI(); });
+  $("#btn-preview-member")?.addEventListener("click", () => {
+    const email = $("#s-preview-member")?.value;
+    if (email) renderMemberStatsUI(email, STATS_RECORDS, { preview: true });
+  });
   $("#s-modality")?.addEventListener("change", (e) => { STATS_FILTER.modality = e.target.value; renderStatsUI(); });
 }
 
