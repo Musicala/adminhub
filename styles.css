@@ -1771,6 +1771,13 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .tabToggle{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:4px 9px; border-radius:9px; background:var(--muteBg); cursor:pointer; user-select:none; }
 .tabToggle input{ accent-color:var(--a2); margin:0; }
 .tabToggle.off{ color:var(--muted); opacity:.75; text-decoration:line-through; }
+.hubLinksHead{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.hubLinkList{ display:grid; gap:8px; }
+.hubLinkRow{ display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--card2); border:1px solid var(--line); border-radius:var(--r); }
+.hubLinkRow.inactive{ opacity:.6; }
+.hubLinkInfo{ flex:1; min-width:0; display:grid; gap:3px; }
+.hubLinkInfo small{ color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hubLinkAud{ display:flex; gap:5px; flex-wrap:wrap; }
 .tableActions{ display:flex; gap:6px; flex-wrap:wrap; }
 .btnGhost.danger{ color:#b42318; border-color:rgba(180,35,24,.22); background:rgba(180,35,24,.06); }
 .btnGhost.danger:hover{ border-color:rgba(180,35,24,.38); background:rgba(180,35,24,.1); }

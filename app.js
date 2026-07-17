@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-17.1";
+const BUILD = "2026-07-17.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -75,6 +75,7 @@ const HUB = {
 const COLLECTIONS = {
   shiftRecords: "adminShiftRecords",
   memberSettings: "adminMemberSettings",
+  hubLinks: "adminHubLinks",
   scheduleOverrides: "adminScheduleOverrides",
   hoursBank: "adminHoursBank"
 };
@@ -197,6 +198,7 @@ let CURRENT_TAB = "inicio";
 let MEMBER_SETTINGS = {};     // email -> settings doc (normalizado)
 let SCHEDULE_OVERRIDES = {};  // `${email}__${date}` -> override doc
 let HOURS_BANK = {};          // id -> movimiento de bolsa de horas
+let HUB_LINKS = {};           // id -> botón de acceso rápido personalizado
 let DATA_LOADED = false;
 
 /* ==========================================================================
@@ -442,7 +444,11 @@ async function loadAdminData({ force = false } = {}) {
   MEMBER_SETTINGS = {};
   SCHEDULE_OVERRIDES = {};
   HOURS_BANK = {};
+  HUB_LINKS = {};
   try {
+    // Botones personalizados: todo el equipo los lee (la visibilidad fina se filtra en cliente).
+    const hl = await getDocs(collection(DB, COLLECTIONS.hubLinks)).catch(() => null);
+    hl?.forEach((d) => { HUB_LINKS[d.id] = normalizeHubLink(d.id, d.data()); });
     if (isCurrentUserAdmin()) {
       const ms = await getDocs(collection(DB, COLLECTIONS.memberSettings));
       ms.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
@@ -530,6 +536,33 @@ function defaultSettingsFor(email, extra = {}) {
     weeklySchedule: defaultWeeklySchedule(),
     ...extra
   };
+}
+
+function normalizeHubLink(id, data) {
+  const audience = Array.isArray(data?.audience)
+    ? data.audience.map((e) => String(e).toLowerCase().trim()).filter(Boolean)
+    : "all";
+  return {
+    id,
+    title: String(data?.title || "").trim(),
+    subtitle: String(data?.subtitle || "").trim(),
+    icon: String(data?.icon || "").trim() || "🔗",
+    url: String(data?.url || "").trim(),
+    audience: audience === "all" || !audience.length ? "all" : audience,
+    active: data?.active !== false,
+    order: Number.isFinite(data?.order) ? data.order : 999
+  };
+}
+
+function hubLinkVisibleFor(link, email) {
+  if (!link?.active || !link.url) return false;
+  return link.audience === "all" || link.audience.includes(String(email || "").toLowerCase().trim());
+}
+
+function visibleHubLinks(email = ACTIVE_EMAIL) {
+  return Object.values(HUB_LINKS)
+    .filter((l) => hubLinkVisibleFor(l, email))
+    .sort((a, b) => (a.order - b.order) || a.title.localeCompare(b.title));
 }
 
 function normalizeSettings(data) {
@@ -1788,7 +1821,8 @@ async function deleteHoursEntry(id) {
 
 function renderQuickLinksSection() {
   const items = HUB.QUICK_LINKS.filter((q) => q.id === "horario" || String(ACTIVE_LINKS[q.id] || "").trim());
-  if (!items.length) return "";
+  const custom = visibleHubLinks();
+  if (!items.length && !custom.length) return "";
   return `
     <section class="dashSection">
       <h3 class="sectionH">Accesos rápidos</h3>
@@ -1798,6 +1832,11 @@ function renderQuickLinksSection() {
             <span class="linkIco">${escapeHtml(q.icon)}</span>
             <span class="linkText"><strong>${escapeHtml(q.title)}</strong><small>${escapeHtml(q.subtitle)}</small></span>
           </button>`).join("")}
+        ${custom.map((l) => `
+          <button class="linkTile" type="button" data-hublink="${escapeHtml(l.id)}">
+            <span class="linkIco">${escapeHtml(l.icon)}</span>
+            <span class="linkText"><strong>${escapeHtml(l.title)}</strong><small>${escapeHtml(l.subtitle || (l.audience === "all" ? "General" : "Personal"))}</small></span>
+          </button>`).join("")}
       </div>
     </section>`;
 }
@@ -1805,6 +1844,12 @@ function renderQuickLinksSection() {
 function wireGoButtons() {
   $$("[data-go]", panel()).forEach((b) => b.addEventListener("click", () => goTab(b.dataset.go)));
   $$("[data-link]", panel()).forEach((b) => b.addEventListener("click", () => openExternalLink(b.dataset.link)));
+  $$("[data-hublink]", panel()).forEach((b) => b.addEventListener("click", () => {
+    const url = String(HUB_LINKS[b.dataset.hublink]?.url || "").trim();
+    if (!url) { toast("Este acceso aún no tiene link configurado."); return; }
+    const safeUrl = /^(https?:)?\/\//i.test(url) ? url : `https://${url}`;
+    window.open(safeUrl, "_blank", "noopener,noreferrer");
+  }));
 }
 
 function openExternalLink(id) {
@@ -3539,8 +3584,54 @@ async function renderTeamTab() {
         </div>`;
       }).join("")}
     </section>
+    <section class="dashSection">
+      <div class="hubLinksHead">
+        <div>
+          <h3 class="sectionH">Botones de acceso rápido</h3>
+          <p class="dashSub">Botones personalizados que aparecen en el Inicio. Puedes elegir quién ve cada uno.</p>
+        </div>
+        <button class="btnPrimary btnSmall" type="button" id="btn-add-hublink">+ Agregar botón</button>
+      </div>
+      ${Object.keys(HUB_LINKS).length ? `
+        <div class="hubLinkList">
+          ${Object.values(HUB_LINKS).sort((a, b) => (a.order - b.order) || a.title.localeCompare(b.title)).map((l) => `
+            <div class="hubLinkRow${l.active ? "" : " inactive"}">
+              <span class="linkIco">${escapeHtml(l.icon)}</span>
+              <div class="hubLinkInfo">
+                <strong>${escapeHtml(l.title)}</strong>
+                <small>${escapeHtml(l.url)}</small>
+                <div class="hubLinkAud">
+                  ${l.active ? "" : `<span class="badgeChip muted">Oculto</span>`}
+                  ${l.audience === "all"
+                    ? `<span class="badgeChip info">Todo el equipo</span>`
+                    : l.audience.map((e) => `<span class="badgeChip muted">${escapeHtml(getProfileName(e))}</span>`).join("")}
+                </div>
+              </div>
+              <div class="tableActions">
+                <button class="btnGhost btnSmall" type="button" data-edit-hublink="${escapeHtml(l.id)}">Editar</button>
+                <button class="btnGhost btnSmall danger" type="button" data-del-hublink="${escapeHtml(l.id)}">Eliminar</button>
+              </div>
+            </div>
+          `).join("")}
+        </div>` : `<div class="emptyState small">Aún no has creado botones. Los botones fijos (Nómina, Reglamento, etc.) siguen apareciendo en el Inicio.</div>`}
+    </section>
   `);
   $$("[data-config]", panel()).forEach((b) => b.addEventListener("click", () => { CONFIG_EMAIL = b.dataset.config; goTab("config"); }));
+  $("#btn-add-hublink")?.addEventListener("click", () => openHubLinkModal());
+  $$("[data-edit-hublink]", panel()).forEach((b) => b.addEventListener("click", () => openHubLinkModal(b.dataset.editHublink)));
+  $$("[data-del-hublink]", panel()).forEach((b) => b.addEventListener("click", async () => {
+    const id = b.dataset.delHublink;
+    if (!window.confirm(`¿Eliminar el botón "${HUB_LINKS[id]?.title || id}"? Desaparecerá del Inicio de todo el equipo.`)) return;
+    try {
+      await deleteDoc(doc(DB, COLLECTIONS.hubLinks, id));
+      delete HUB_LINKS[id];
+      toast("Botón eliminado", { kind: "ok" });
+      renderTeamTab();
+    } catch (error) {
+      console.error(error);
+      toast("No se pudo eliminar el botón.", { kind: "warn" });
+    }
+  }));
   $$("[data-tab-vis]", panel()).forEach((cb) => cb.addEventListener("change", async () => {
     const email = cb.dataset.email;
     const tabId = cb.dataset.tab;
@@ -3565,6 +3656,72 @@ async function renderTeamTab() {
       cb.disabled = false;
     }
   }));
+}
+
+function openHubLinkModal(linkId = "") {
+  const link = HUB_LINKS[linkId] || null;
+  const members = Object.entries(HUB.USERS || {}).map(([email, u]) => ({ email, name: u.label || email }));
+  const isAll = !link || link.audience === "all";
+  openModal(link ? "Editar botón" : "Nuevo botón", "Accesos rápidos del Inicio", "Panel admin", `
+    <div class="formGrid">
+      <label class="field"><span class="fieldLabel">Ícono (emoji)</span><input id="hl-icon" class="input" maxlength="4" value="${escapeHtml(link?.icon || "🔗")}" /></label>
+      <label class="field"><span class="fieldLabel">Título</span><input id="hl-title" class="input" value="${escapeHtml(link?.title || "")}" placeholder="Ej: Drive del equipo" /></label>
+      <label class="field"><span class="fieldLabel">Subtítulo</span><input id="hl-subtitle" class="input" value="${escapeHtml(link?.subtitle || "")}" placeholder="Ej: General" /></label>
+      <label class="field"><span class="fieldLabel">Link (URL)</span><input id="hl-url" class="input" value="${escapeHtml(link?.url || "")}" placeholder="https://..." /></label>
+    </div>
+    <div class="field">
+      <span class="fieldLabel">¿Quién lo ve?</span>
+      <div class="tabToggleRow">
+        <label class="tabToggle"><input type="radio" name="hl-aud" value="all" ${isAll ? "checked" : ""} /> <span>Todo el equipo</span></label>
+        <label class="tabToggle"><input type="radio" name="hl-aud" value="some" ${isAll ? "" : "checked"} /> <span>Solo personas seleccionadas</span></label>
+      </div>
+      <div class="tabToggleRow" id="hl-members" ${isAll ? "hidden" : ""}>
+        ${members.map((m) => `<label class="tabToggle"><input type="checkbox" data-hl-member value="${escapeHtml(m.email)}" ${!isAll && link.audience.includes(m.email) ? "checked" : ""} /> <span>${escapeHtml(m.name)}</span></label>`).join("")}
+      </div>
+    </div>
+    <label class="tabToggle" style="margin-top:10px;"><input type="checkbox" id="hl-active" ${link?.active === false ? "" : "checked"} /> <span>Botón activo (visible en el Inicio)</span></label>
+    <div class="tableActions" style="margin-top:14px;">
+      <button class="btnPrimary" id="hl-save" type="button">${link ? "Guardar cambios" : "Crear botón"}</button>
+      <button class="btnGhost" id="hl-cancel" type="button">Cancelar</button>
+    </div>
+  `);
+  $$('input[name="hl-aud"]').forEach((r) => r.addEventListener("change", () => {
+    $("#hl-members").hidden = document.querySelector('input[name="hl-aud"]:checked')?.value === "all";
+  }));
+  $("#hl-cancel").addEventListener("click", closeModal);
+  $("#hl-save").addEventListener("click", async () => {
+    const title = $("#hl-title").value.trim();
+    const url = $("#hl-url").value.trim();
+    if (!title || !url) { toast("El botón necesita al menos título y link.", { kind: "warn" }); return; }
+    const audMode = document.querySelector('input[name="hl-aud"]:checked')?.value || "all";
+    const emails = $$("[data-hl-member]").filter((c) => c.checked).map((c) => c.value);
+    const audience = (audMode === "all" || !emails.length) ? "all" : emails;
+    const id = linkId || `hl_${Date.now()}`;
+    const payload = {
+      title,
+      url,
+      subtitle: $("#hl-subtitle").value.trim(),
+      icon: $("#hl-icon").value.trim() || "🔗",
+      audience,
+      active: $("#hl-active").checked,
+      order: HUB_LINKS[id]?.order ?? Object.keys(HUB_LINKS).length + 1,
+      updatedAtClient: Date.now(),
+      updatedBy: ACTIVE_EMAIL
+    };
+    const btn = $("#hl-save");
+    btn.disabled = true;
+    try {
+      await setDoc(doc(DB, COLLECTIONS.hubLinks, id), { ...payload, updatedAt: serverTimestamp(), ...(linkId ? {} : { createdAt: serverTimestamp() }) }, { merge: true });
+      HUB_LINKS[id] = normalizeHubLink(id, payload);
+      await closeModal();
+      toast(linkId ? "Botón actualizado" : "Botón creado", { kind: "ok" });
+      renderTeamTab();
+    } catch (error) {
+      console.error(error);
+      toast("No se pudo guardar el botón.", { kind: "warn" });
+      btn.disabled = false;
+    }
+  });
 }
 
 /* ==========================================================================

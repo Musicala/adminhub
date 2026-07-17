@@ -184,6 +184,13 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ===== Botones de acceso rápido del Inicio =====
+    match /adminHubLinks/{linkId} {
+      // Todo el equipo lee los botones; solo admins los crean/editan/eliminan.
+      allow read: if isTeam();
+      allow create, update, delete: if isAdmin();
+    }
+
     // ===== Seguimiento de Compras (ruta aislada) =====
     match /apps/compras-musicala/items/{itemId} {
       allow read, create, update: if isComprasUser();
