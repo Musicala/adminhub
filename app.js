@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-14.3";
+const BUILD = "2026-07-17.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -552,6 +552,7 @@ function normalizeSettings(data) {
     role: data?.role === "admin" ? "admin" : "member",
     active: data?.active !== false,
     canWorkRemote: Boolean(data?.canWorkRemote),
+    hiddenTabs: Array.isArray(data?.hiddenTabs) ? data.hiddenTabs.filter((t) => typeof t === "string") : [],
     defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
     weeklyTargetHours: Number.isFinite(data?.weeklyTargetHours) && data.weeklyTargetHours > 0 ? data.weeklyTargetHours : DEFAULT_WEEKLY_TARGET_HOURS,
     weeklyTargets: normalizeWeeklyTargets(data?.weeklyTargets),
@@ -1017,11 +1018,22 @@ const TABS = [
   { id: "equipo", label: "Equipo", admin: true }
 ];
 
+/* Secciones que un admin puede ocultar por miembro. "inicio" siempre queda visible. */
+const MEMBER_LOCKED_TABS = ["inicio"];
+function memberConfigurableTabs() {
+  return TABS.filter((t) => !t.admin && !MEMBER_LOCKED_TABS.includes(t.id));
+}
+function isTabHiddenFor(email, tabId) {
+  if (isAdminEmail(email)) return false;
+  if (MEMBER_LOCKED_TABS.includes(tabId)) return false;
+  return (MEMBER_SETTINGS[email]?.hiddenTabs || []).includes(tabId);
+}
+
 function renderNav() {
   const nav = $("#panel-nav");
   if (!nav) return;
   const admin = isCurrentUserAdmin();
-  nav.innerHTML = TABS.filter((t) => (!t.admin || admin) && !(t.memberOnly && admin)).map((t) => `
+  nav.innerHTML = TABS.filter((t) => (!t.admin || admin) && !(t.memberOnly && admin) && !isTabHiddenFor(ACTIVE_EMAIL, t.id)).map((t) => `
     <button class="navItem${t.id === CURRENT_TAB ? " active" : ""}" type="button" data-tab="${t.id}">
       <span class="navLbl">${escapeHtml(t.label)}</span>
     </button>
@@ -1038,6 +1050,7 @@ function renderNav() {
 async function goTab(tab) {
   const def = TABS.find((t) => t.id === tab);
   if (def?.admin && !isCurrentUserAdmin()) { toast("No tienes permisos para esta sección.", { kind: "warn" }); return; }
+  if (isTabHiddenFor(ACTIVE_EMAIL, tab)) { toast("Esta sección no está habilitada para tu usuario.", { kind: "warn" }); tab = "inicio"; }
   if (def?.memberOnly && isCurrentUserAdmin()) { tab = "inicio"; }
   CURRENT_TAB = tab;
   renderNav();
@@ -3510,12 +3523,48 @@ async function renderTeamTab() {
           ${hasSchedule
             ? `<div class="memberDays">${days.map((d) => `<span class="dayPill">${d.short} ${escapeHtml(s.weeklySchedule[d.key].start)}</span>`).join("")}</div>`
             : `<div class="emptyState small">Este miembro no tiene horario configurado.</div>`}
+          ${!isAdminEmail(m.email) ? `
+          <div class="memberTabs">
+            <p class="memberTabsTitle">Secciones visibles en su app</p>
+            <div class="tabToggleRow">
+              ${memberConfigurableTabs().map((t) => `
+                <label class="tabToggle${(s.hiddenTabs || []).includes(t.id) ? " off" : ""}">
+                  <input type="checkbox" data-tab-vis data-email="${escapeHtml(m.email)}" data-tab="${t.id}" ${(s.hiddenTabs || []).includes(t.id) ? "" : "checked"} />
+                  <span>${escapeHtml(t.label)}</span>
+                </label>
+              `).join("")}
+            </div>
+          </div>` : ""}
           <button class="btnGhost btnSmall" type="button" data-config="${escapeHtml(m.email)}">Configurar horario</button>
         </div>`;
       }).join("")}
     </section>
   `);
   $$("[data-config]", panel()).forEach((b) => b.addEventListener("click", () => { CONFIG_EMAIL = b.dataset.config; goTab("config"); }));
+  $$("[data-tab-vis]", panel()).forEach((cb) => cb.addEventListener("change", async () => {
+    const email = cb.dataset.email;
+    const tabId = cb.dataset.tab;
+    const label = TABS.find((t) => t.id === tabId)?.label || tabId;
+    const current = MEMBER_SETTINGS[email] || normalizeSettings(defaultSettingsFor(email));
+    const set = new Set(current.hiddenTabs || []);
+    if (cb.checked) set.delete(tabId); else set.add(tabId);
+    const hiddenTabs = Array.from(set);
+    cb.disabled = true;
+    try {
+      await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(email)), {
+        email, hiddenTabs, updatedAt: serverTimestamp(), updatedAtClient: Date.now(), updatedBy: ACTIVE_EMAIL
+      }, { merge: true });
+      MEMBER_SETTINGS[email] = { ...current, hiddenTabs };
+      cb.closest(".tabToggle")?.classList.toggle("off", !cb.checked);
+      toast(`"${label}" ${cb.checked ? "visible" : "oculta"} para ${current.name || email}`);
+    } catch (error) {
+      console.error(error);
+      cb.checked = !cb.checked;
+      toast("No se pudo guardar el cambio de visibilidad.", { kind: "warn" });
+    } finally {
+      cb.disabled = false;
+    }
+  }));
 }
 
 /* ==========================================================================
