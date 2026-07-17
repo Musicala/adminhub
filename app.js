@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-17.2";
+const BUILD = "2026-07-17.3";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -3658,13 +3658,26 @@ async function renderTeamTab() {
   }));
 }
 
+const HUB_LINK_EMOJIS = [
+  "🔗", "📁", "📄", "📝", "🗓️", "💰", "🧾", "📊", "📈", "✅",
+  "📌", "🔑", "🎵", "🎹", "🎸", "🎤", "🎧", "🏫", "🛒", "📦",
+  "💳", "📷", "🎬", "🌐", "💬", "⭐", "⚙️", "🚀", "❤️", "🎉"
+];
+
 function openHubLinkModal(linkId = "") {
   const link = HUB_LINKS[linkId] || null;
   const members = Object.entries(HUB.USERS || {}).map(([email, u]) => ({ email, name: u.label || email }));
   const isAll = !link || link.audience === "all";
+  let chosenIcon = link?.icon || "🔗";
+  const emojis = HUB_LINK_EMOJIS.includes(chosenIcon) ? HUB_LINK_EMOJIS : [chosenIcon, ...HUB_LINK_EMOJIS];
   openModal(link ? "Editar botón" : "Nuevo botón", "Accesos rápidos del Inicio", "Panel admin", `
+    <div class="field" style="margin-bottom:12px;">
+      <span class="fieldLabel">Ícono</span>
+      <div class="emojiRow" id="hl-icon-row">
+        ${emojis.map((e) => `<button type="button" class="emojiOpt${e === chosenIcon ? " selected" : ""}" data-emoji="${escapeHtml(e)}">${escapeHtml(e)}</button>`).join("")}
+      </div>
+    </div>
     <div class="formGrid">
-      <label class="field"><span class="fieldLabel">Ícono (emoji)</span><input id="hl-icon" class="input" maxlength="4" value="${escapeHtml(link?.icon || "🔗")}" /></label>
       <label class="field"><span class="fieldLabel">Título</span><input id="hl-title" class="input" value="${escapeHtml(link?.title || "")}" placeholder="Ej: Drive del equipo" /></label>
       <label class="field"><span class="fieldLabel">Subtítulo</span><input id="hl-subtitle" class="input" value="${escapeHtml(link?.subtitle || "")}" placeholder="Ej: General" /></label>
       <label class="field"><span class="fieldLabel">Link (URL)</span><input id="hl-url" class="input" value="${escapeHtml(link?.url || "")}" placeholder="https://..." /></label>
@@ -3675,7 +3688,7 @@ function openHubLinkModal(linkId = "") {
         <label class="tabToggle"><input type="radio" name="hl-aud" value="all" ${isAll ? "checked" : ""} /> <span>Todo el equipo</span></label>
         <label class="tabToggle"><input type="radio" name="hl-aud" value="some" ${isAll ? "" : "checked"} /> <span>Solo personas seleccionadas</span></label>
       </div>
-      <div class="tabToggleRow" id="hl-members" ${isAll ? "hidden" : ""}>
+      <div class="tabToggleRow" id="hl-members" style="${isAll ? "display:none;" : ""}">
         ${members.map((m) => `<label class="tabToggle"><input type="checkbox" data-hl-member value="${escapeHtml(m.email)}" ${!isAll && link.audience.includes(m.email) ? "checked" : ""} /> <span>${escapeHtml(m.name)}</span></label>`).join("")}
       </div>
     </div>
@@ -3686,7 +3699,11 @@ function openHubLinkModal(linkId = "") {
     </div>
   `);
   $$('input[name="hl-aud"]').forEach((r) => r.addEventListener("change", () => {
-    $("#hl-members").hidden = document.querySelector('input[name="hl-aud"]:checked')?.value === "all";
+    $("#hl-members").style.display = document.querySelector('input[name="hl-aud"]:checked')?.value === "all" ? "none" : "";
+  }));
+  $$(".emojiOpt", $("#hl-icon-row")).forEach((b) => b.addEventListener("click", () => {
+    chosenIcon = b.dataset.emoji;
+    $$(".emojiOpt", $("#hl-icon-row")).forEach((x) => x.classList.toggle("selected", x === b));
   }));
   $("#hl-cancel").addEventListener("click", closeModal);
   $("#hl-save").addEventListener("click", async () => {
@@ -3701,7 +3718,7 @@ function openHubLinkModal(linkId = "") {
       title,
       url,
       subtitle: $("#hl-subtitle").value.trim(),
-      icon: $("#hl-icon").value.trim() || "🔗",
+      icon: chosenIcon || "🔗",
       audience,
       active: $("#hl-active").checked,
       order: HUB_LINKS[id]?.order ?? Object.keys(HUB_LINKS).length + 1,

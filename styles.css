@@ -1778,6 +1778,10 @@ textarea.input{ resize:vertical; font-family:inherit; }
 .hubLinkInfo{ flex:1; min-width:0; display:grid; gap:3px; }
 .hubLinkInfo small{ color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .hubLinkAud{ display:flex; gap:5px; flex-wrap:wrap; }
+.emojiRow{ display:flex; gap:6px; flex-wrap:wrap; }
+.emojiOpt{ font-size:18px; line-height:1; padding:7px 9px; border-radius:10px; background:var(--muteBg); border:2px solid transparent; cursor:pointer; transition:transform var(--durFast) var(--easeOut); }
+.emojiOpt:hover{ transform:scale(1.12); }
+.emojiOpt.selected{ border-color:var(--a2); background:var(--card2); }
 .tableActions{ display:flex; gap:6px; flex-wrap:wrap; }
 .btnGhost.danger{ color:#b42318; border-color:rgba(180,35,24,.22); background:rgba(180,35,24,.06); }
 .btnGhost.danger:hover{ border-color:rgba(180,35,24,.38); background:rgba(180,35,24,.1); }
