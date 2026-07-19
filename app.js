@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-17.3";
+const BUILD = "2026-07-18.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -77,7 +77,8 @@ const COLLECTIONS = {
   memberSettings: "adminMemberSettings",
   hubLinks: "adminHubLinks",
   scheduleOverrides: "adminScheduleOverrides",
-  hoursBank: "adminHoursBank"
+  hoursBank: "adminHoursBank",
+  hubSettings: "adminHubSettings"
 };
 
 const LEGACY_ANNUAL_SCHEDULE_SOURCES = {
@@ -199,6 +200,7 @@ let MEMBER_SETTINGS = {};     // email -> settings doc (normalizado)
 let SCHEDULE_OVERRIDES = {};  // `${email}__${date}` -> override doc
 let HOURS_BANK = {};          // id -> movimiento de bolsa de horas
 let HUB_LINKS = {};           // id -> botón de acceso rápido personalizado
+let HUB_SETTINGS = { collectiveVacation: null };
 let DATA_LOADED = false;
 
 /* ==========================================================================
@@ -445,10 +447,13 @@ async function loadAdminData({ force = false } = {}) {
   SCHEDULE_OVERRIDES = {};
   HOURS_BANK = {};
   HUB_LINKS = {};
+  HUB_SETTINGS = { collectiveVacation: null };
   try {
     // Botones personalizados: todo el equipo los lee (la visibilidad fina se filtra en cliente).
     const hl = await getDocs(collection(DB, COLLECTIONS.hubLinks)).catch(() => null);
     hl?.forEach((d) => { HUB_LINKS[d.id] = normalizeHubLink(d.id, d.data()); });
+    const hs = await getDoc(doc(DB, COLLECTIONS.hubSettings, "general"));
+    HUB_SETTINGS = normalizeHubSettings(hs.exists() ? hs.data() : {});
     if (isCurrentUserAdmin()) {
       const ms = await getDocs(collection(DB, COLLECTIONS.memberSettings));
       ms.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
@@ -534,6 +539,8 @@ function defaultSettingsFor(email, extra = {}) {
     defaultGraceMinutes: 5,
     weeklyTargetHours: DEFAULT_WEEKLY_TARGET_HOURS,
     weeklySchedule: defaultWeeklySchedule(),
+    contractType: "indefinido",
+    contractEndDate: "",
     ...extra
   };
 }
@@ -591,9 +598,25 @@ function normalizeSettings(data) {
     weeklyTargets: normalizeWeeklyTargets(data?.weeklyTargets),
     weekTargetOverrides: normalizeWeekTargetOverrides(data?.weekTargetOverrides),
     weeklySchedule: weekly,
+    contractType: data?.contractType === "fijo" ? "fijo" : "indefinido",
+    contractEndDate: typeof data?.contractEndDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.contractEndDate) ? data.contractEndDate : "",
     updatedAtClient: data?.updatedAtClient || null,
     updatedBy: data?.updatedBy || ""
   };
+}
+
+function normalizeHubSettings(data) {
+  const raw = data?.collectiveVacation || {};
+  const startDate = typeof raw.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.startDate) ? raw.startDate : "";
+  const durationDays = Math.max(0, Math.min(60, Number(raw.durationDays) || 0));
+  return { collectiveVacation: startDate && durationDays ? { startDate, durationDays } : null };
+}
+
+function collectiveVacationForDate(date) {
+  const vacation = HUB_SETTINGS?.collectiveVacation;
+  if (!vacation?.startDate || !vacation.durationDays) return null;
+  const endDate = addDaysStr(vacation.startDate, vacation.durationDays - 1);
+  return date >= vacation.startDate && date <= endDate ? vacation : null;
 }
 
 /* Metas de horas semanales fechadas: [{ from: "YYYY-MM-DD", hours }].
@@ -1530,6 +1553,7 @@ function getCalendarDayForDate(email, date) {
     if (override.enabled === false) return { schedule: null, label: override.reason || "Sin jornada" };
     return { schedule: getExpectedScheduleForDate(email, date), label: "" };
   }
+  if (collectiveVacationForDate(date)) return { schedule: null, label: "Vacaciones colectivas" };
   const legacy = LEGACY_ANNUAL_CACHE[`${email}__${date.slice(0, 4)}`]?.[date];
   if (legacy) {
     if (legacy.source === "legacy-free") return { schedule: null, label: legacy.label || "Sin jornada" };
@@ -3132,10 +3156,23 @@ async function renderConfigTab() {
         </select></label>
       <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepción / cambio de horario</button>
     </section>
+    <section class="card cfgCard quickConfigCard">
+      <div>
+        <h3 class="sectionH">Vacaciones colectivas</h3>
+        <p class="modalNote">Configúralas una vez y se verán como días libres en el horario anual de todo el equipo. Las excepciones manuales por persona conservan prioridad.</p>
+      </div>
+      <div class="formGrid">
+        <label class="field"><span class="fieldLabel">Inicio</span><input type="date" id="cv-start" class="input" value="${escapeHtml(HUB_SETTINGS.collectiveVacation?.startDate || "")}"></label>
+        <label class="field"><span class="fieldLabel">Duración (días calendario)</span><input type="number" id="cv-days" class="input" min="1" max="60" step="1" value="${escapeHtml(String(HUB_SETTINGS.collectiveVacation?.durationDays || ""))}" placeholder="Ej. 10"></label>
+      </div>
+      <div class="modalActions"><button class="btnGhost btnSmall" type="button" id="btn-clear-vacation" ${HUB_SETTINGS.collectiveVacation ? "" : "disabled"}>Quitar vacaciones colectivas</button><button class="btnPrimary btnSmall" type="button" id="btn-save-vacation">Guardar vacaciones colectivas</button></div>
+    </section>
     <div id="cfg-body"></div>
   `);
   $("#cfg-member").addEventListener("change", (e) => { CONFIG_EMAIL = e.target.value; renderMemberSettings(); });
   $("#cfg-add-override").addEventListener("click", () => openOverrideModalV2(CONFIG_EMAIL));
+  $("#btn-save-vacation").addEventListener("click", saveCollectiveVacation);
+  $("#btn-clear-vacation").addEventListener("click", () => saveCollectiveVacation({ clear: true }));
   renderMemberSettings();
 }
 
@@ -3188,6 +3225,8 @@ function renderMemberSettings() {
           <label class="field"><span class="fieldLabel">Rol</span>
             <select id="m-role" class="input"><option value="member" ${s.role !== "admin" ? "selected" : ""}>Miembro</option><option value="admin" ${s.role === "admin" ? "selected" : ""}>Admin</option></select></label>
           <label class="field"><span class="fieldLabel">Gracia por defecto (min)</span><input type="number" id="m-grace" class="input" min="0" max="120" value="${s.defaultGraceMinutes}"></label>
+          <label class="field"><span class="fieldLabel">Tipo de contrato</span><select id="m-contract-type" class="input"><option value="indefinido" ${s.contractType !== "fijo" ? "selected" : ""}>Indefinido</option><option value="fijo" ${s.contractType === "fijo" ? "selected" : ""}>Término fijo</option></select></label>
+          <label class="field" id="m-contract-end-wrap" ${s.contractType === "fijo" ? "" : "hidden"}><span class="fieldLabel">Contrato vigente hasta</span><input type="date" id="m-contract-end" class="input" value="${escapeHtml(s.contractEndDate || "")}"></label>
         </div>
         <div class="cfgToggles">
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
@@ -3252,6 +3291,9 @@ function renderMemberSettings() {
     </section>
   `;
   $("#btn-save-settings").addEventListener("click", saveMemberSettings);
+  $("#m-contract-type")?.addEventListener("change", (e) => {
+    $("#m-contract-end-wrap")?.toggleAttribute("hidden", e.target.value !== "fijo");
+  });
   $("#btn-add-target")?.addEventListener("click", () => {
     $("#m-targets")?.insertAdjacentHTML("beforeend", targetRowHtml({ from: "", hours: 42 }));
   });
@@ -3306,6 +3348,8 @@ async function saveMemberSettings() {
     role: $("#m-role").value,
     active: $("#m-active").checked,
     canWorkRemote: $("#m-remote").checked,
+    contractType: $("#m-contract-type").value === "fijo" ? "fijo" : "indefinido",
+    contractEndDate: $("#m-contract-type").value === "fijo" ? $("#m-contract-end").value : "",
     defaultGraceMinutes: Number($("#m-grace").value) || 0,
     weeklyTargetHours: baselineTarget,
     weeklyTargets,
@@ -3324,6 +3368,28 @@ async function saveMemberSettings() {
   } catch (error) {
     console.error(error);
     toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la configuración.", { kind: "warn" });
+  }
+}
+
+async function saveCollectiveVacation({ clear = false } = {}) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  const startDate = $("#cv-start")?.value || "";
+  const durationDays = Number($("#cv-days")?.value);
+  if (!clear && (!startDate || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > 60)) {
+    toast("Indica una fecha de inicio y una duración entre 1 y 60 días.", { kind: "warn" }); return;
+  }
+  if (!confirm(clear ? "¿Quitar las vacaciones colectivas del calendario?" : `¿Guardar ${durationDays} días de vacaciones colectivas desde ${startDate}?`)) return;
+  try {
+    const collectiveVacation = clear ? null : { startDate, durationDays };
+    await setDoc(doc(DB, COLLECTIONS.hubSettings, "general"), {
+      collectiveVacation, updatedAt: serverTimestamp(), updatedAtClient: Date.now(), updatedBy: ACTIVE_EMAIL
+    }, { merge: true });
+    HUB_SETTINGS = { collectiveVacation };
+    toast(clear ? "Vacaciones colectivas quitadas" : "Vacaciones colectivas guardadas", { kind: "ok" });
+    renderConfigTab();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar las vacaciones.", { kind: "warn" });
   }
 }
 

@@ -169,6 +169,13 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Vacaciones colectivas: las consulta todo el equipo y las configura admin.
+    match /adminHubSettings/{settingId} {
+      allow read: if isTeam() || isAdmin();
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
     // ===== Excepciones de horario por fecha =====
     match /adminScheduleOverrides/{overrideId} {
       allow read: if isAdmin() || readsOwnResource();
