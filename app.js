@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-21.1";
+const BUILD = "2026-07-21.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -612,9 +612,11 @@ function normalizeHubSettings(data) {
   return { collectiveVacation: startDate && durationDays ? { startDate, durationDays } : null };
 }
 
-function collectiveVacationForDate(date) {
+function collectiveVacationForDate(date, email) {
   const vacation = HUB_SETTINGS?.collectiveVacation;
   if (!vacation?.startDate || !vacation.durationDays) return null;
+  // Las vacaciones colectivas solo aplican a contratos indefinidos.
+  if (email && MEMBER_SETTINGS[email]?.contractType === "fijo") return null;
   const endDate = addDaysStr(vacation.startDate, vacation.durationDays - 1);
   return date >= vacation.startDate && date <= endDate ? vacation : null;
 }
@@ -1553,7 +1555,7 @@ function getCalendarDayForDate(email, date) {
     if (override.enabled === false) return { schedule: null, label: override.reason || "Sin jornada" };
     return { schedule: getExpectedScheduleForDate(email, date), label: "" };
   }
-  if (collectiveVacationForDate(date)) return { schedule: null, label: "Vacaciones colectivas" };
+  if (collectiveVacationForDate(date, email)) return { schedule: null, label: "Vacaciones colectivas" };
   const legacy = LEGACY_ANNUAL_CACHE[`${email}__${date.slice(0, 4)}`]?.[date];
   if (legacy) {
     if (legacy.source === "legacy-free") return { schedule: null, label: legacy.label || "Sin jornada" };
@@ -3387,6 +3389,7 @@ async function saveMemberGeneral() {
     updatedAtClient: Date.now(),
     updatedBy: ACTIVE_EMAIL
   };
+  if (!confirm("¿Guardar los datos generales de este miembro?")) return;
   try {
     await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
     MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings({ ...MEMBER_SETTINGS[CONFIG_EMAIL], ...payload });
