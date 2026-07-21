@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-18.1";
+const BUILD = "2026-07-21.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -3232,6 +3232,10 @@ function renderMemberSettings() {
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
           <label class="field checkField"><input type="checkbox" id="m-remote" ${s.canWorkRemote ? "checked" : ""}> <span>Puede marcar remoto</span></label>
         </div>
+        <div class="modalActions" style="justify-content:flex-start;margin-top:4px">
+          <button class="btnPrimary btnSmall" type="button" id="btn-save-general">Guardar datos generales</button>
+          <span class="modalNote" style="margin:0">Guarda nombre, rol, contrato y gracia sin tocar el horario.</span>
+        </div>
       </div>
 
       <h3 class="sectionH">Horas semanales (jornada legal)</h3>
@@ -3265,6 +3269,7 @@ function renderMemberSettings() {
       </div>
       <div class="modalActions">
         <button class="btnPrimary" type="button" id="btn-save-settings">Guardar horario</button>
+        <span class="modalNote" style="margin:0">Guarda solo metas de horas y horario semanal.</span>
       </div>
     </section>
 
@@ -3291,6 +3296,7 @@ function renderMemberSettings() {
     </section>
   `;
   $("#btn-save-settings").addEventListener("click", saveMemberSettings);
+  $("#btn-save-general")?.addEventListener("click", saveMemberGeneral);
   $("#m-contract-type")?.addEventListener("change", (e) => {
     $("#m-contract-end-wrap")?.toggleAttribute("hidden", e.target.value !== "fijo");
   });
@@ -3342,15 +3348,9 @@ async function saveMemberSettings() {
   });
   weeklyTargets.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
   const baselineTarget = (weeklyTargets.find((t) => !t.from) || weeklyTargets[0])?.hours || DEFAULT_WEEKLY_TARGET_HOURS;
+  // Solo horario y metas de horas: los datos generales se guardan aparte.
   const payload = {
     email: CONFIG_EMAIL,
-    name: $("#m-name").value.trim(),
-    role: $("#m-role").value,
-    active: $("#m-active").checked,
-    canWorkRemote: $("#m-remote").checked,
-    contractType: $("#m-contract-type").value === "fijo" ? "fijo" : "indefinido",
-    contractEndDate: $("#m-contract-type").value === "fijo" ? $("#m-contract-end").value : "",
-    defaultGraceMinutes: Number($("#m-grace").value) || 0,
     weeklyTargetHours: baselineTarget,
     weeklyTargets,
     weekTargetOverrides: MEMBER_SETTINGS[CONFIG_EMAIL]?.weekTargetOverrides || {},
@@ -3362,12 +3362,39 @@ async function saveMemberSettings() {
   if (!confirm("¿Guardar el horario de este miembro?")) return;
   try {
     await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
-    MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings(payload);
-    toast("Configuración guardada", { kind: "ok" });
+    MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings({ ...MEMBER_SETTINGS[CONFIG_EMAIL], ...payload });
+    toast("Horario guardado", { kind: "ok" });
     renderMemberSettings();
   } catch (error) {
     console.error(error);
-    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar la configuración.", { kind: "warn" });
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo guardar el horario.", { kind: "warn" });
+  }
+}
+
+async function saveMemberGeneral() {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  // Solo datos generales: no toca el horario ni las metas de horas.
+  const payload = {
+    email: CONFIG_EMAIL,
+    name: $("#m-name").value.trim(),
+    role: $("#m-role").value,
+    active: $("#m-active").checked,
+    canWorkRemote: $("#m-remote").checked,
+    contractType: $("#m-contract-type").value === "fijo" ? "fijo" : "indefinido",
+    contractEndDate: $("#m-contract-type").value === "fijo" ? $("#m-contract-end").value : "",
+    defaultGraceMinutes: Number($("#m-grace").value) || 0,
+    updatedAt: serverTimestamp(),
+    updatedAtClient: Date.now(),
+    updatedBy: ACTIVE_EMAIL
+  };
+  try {
+    await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
+    MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings({ ...MEMBER_SETTINGS[CONFIG_EMAIL], ...payload });
+    toast("Datos generales guardados", { kind: "ok" });
+    renderMemberSettings();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudieron guardar los datos generales.", { kind: "warn" });
   }
 }
 
