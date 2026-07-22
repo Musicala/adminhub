@@ -677,6 +677,16 @@ function getScheduleOverride(email, date) {
   return SCHEDULE_OVERRIDES[`${email}__${date}`] || null;
 }
 
+/* Contrato a término fijo: el horario semanal deja de aplicar después de la
+   fecha de finalización, evitando que se proyecte continuidad a años futuros.
+   Devuelve true si la fecha está cubierta por el contrato. */
+function contractCoversDate(email, date) {
+  const s = MEMBER_SETTINGS[email];
+  if (!s || s.contractType !== "fijo") return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s.contractEndDate || "")) return true;
+  return date <= s.contractEndDate;
+}
+
 /* Prioridad: excepción por fecha -> horario semanal -> sin horario (null). */
 function getExpectedScheduleForDate(email, date) {
   const override = getScheduleOverride(email, date);
@@ -692,6 +702,8 @@ function getExpectedScheduleForDate(email, date) {
   }
   const settings = MEMBER_SETTINGS[email];
   if (!settings || settings.active === false) return null;
+  // El horario semanal no aplica después de que finaliza un contrato a término fijo.
+  if (!contractCoversDate(email, date)) return null;
   const day = settings.weeklySchedule?.[weekdayKeyForDate(date)];
   if (!day || !day.enabled) return null;
   return {
@@ -1573,6 +1585,14 @@ async function renderAnnualCalendarTab() {
   if (!activeMember) { setPanel(`<div class="emptyState">No hay trabajadoras activas para mostrar.</div>`); return; }
   await loadLegacyAnnualSchedule(activeMember.email, CALENDAR_YEAR);
   const stats = annualCalendarStats(activeMember.email, CALENDAR_YEAR);
+  const memberSettings = MEMBER_SETTINGS[activeMember.email];
+  const contractEnd = memberSettings?.contractType === "fijo" && /^\d{4}-\d{2}-\d{2}$/.test(memberSettings.contractEndDate || "") ? memberSettings.contractEndDate : "";
+  const yearStartsAfterContract = contractEnd && `${CALENDAR_YEAR}-01-01` > contractEnd;
+  const contractBanner = yearStartsAfterContract ? `
+    <section class="noteBox" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+      <span>El contrato a término fijo de ${escapeHtml(activeMember.name)} finaliza el ${escapeHtml(contractEnd)}, por eso ${CALENDAR_YEAR} no tiene jornada.${isCurrentUserAdmin() ? " Reactiva el horario si se renovó el contrato." : ""}</span>
+      ${isCurrentUserAdmin() ? `<button class="btnPrimary" type="button" id="cal-reactivate">Reactivar horario para ${CALENDAR_YEAR}</button>` : ""}
+    </section>` : "";
   setPanel(`
     <section class="dashHead">
       <div>
@@ -1593,6 +1613,8 @@ async function renderAnnualCalendarTab() {
       ${kpiCard("Semanas incompletas", stats.incompleteWeeks, `de ${stats.scheduledWeeks} con jornada · meta vigente ${minutesToHhmm(stats.targetMin)}/sem`, stats.incompleteWeeks ? "warn" : "ok")}
       ${kpiCard("Excepciones", stats.overrideDays, "cambios por fecha", stats.overrideDays ? "info" : "")}
     </section>
+
+    ${contractBanner}
 
     <section class="annualLegend">
       <span class="legendChip work">Con jornada</span>
@@ -1621,6 +1643,7 @@ async function renderAnnualCalendarTab() {
     if (CALENDAR_MONTH > 11) { CALENDAR_MONTH = 0; CALENDAR_YEAR = Math.min(2035, CALENDAR_YEAR + 1); }
     renderAnnualCalendarTab();
   });
+  $("#cal-reactivate")?.addEventListener("click", () => reactivateContractForYear(activeMember.email, CALENDAR_YEAR));
   $("#cal-member")?.addEventListener("change", (e) => { CALENDAR_EMAIL = e.target.value; renderAnnualCalendarTab(); });
   $("#cal-year")?.addEventListener("change", (e) => {
     CALENDAR_YEAR = Math.max(2024, Math.min(2035, Number(e.target.value) || CALENDAR_YEAR));
@@ -1628,6 +1651,32 @@ async function renderAnnualCalendarTab() {
   });
   $$(".annualDay[data-date]", panel()).forEach((btn) => btn.addEventListener("click", () => openCalendarDayDetail(activeMember.email, btn.dataset.date)));
   $$(".weekStatus[data-week-monday]", panel()).forEach((btn) => btn.addEventListener("click", () => openWeekTargetModal(activeMember.email, btn.dataset.weekMonday)));
+}
+
+/* Reactiva el horario extendiendo el fin de contrato al 31-dic del año indicado.
+   Útil cuando se renueva un contrato a término fijo para el siguiente año. */
+async function reactivateContractForYear(email, year) {
+  if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
+  const name = getProfileName(email);
+  const newEnd = `${year}-12-31`;
+  if (!confirm(`¿Reactivar el horario de ${name} hasta el ${newEnd}?`)) return;
+  const payload = {
+    email,
+    contractType: "fijo",
+    contractEndDate: newEnd,
+    updatedAt: serverTimestamp(),
+    updatedAtClient: Date.now(),
+    updatedBy: ACTIVE_EMAIL
+  };
+  try {
+    await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(email)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
+    MEMBER_SETTINGS[email] = normalizeSettings({ ...MEMBER_SETTINGS[email], ...payload });
+    toast(`Horario reactivado hasta el ${newEnd}`, { kind: "ok" });
+    renderAnnualCalendarTab();
+  } catch (error) {
+    console.error(error);
+    toast(error?.code === "permission-denied" ? "No tienes permisos para esta acción." : "No se pudo reactivar el horario.", { kind: "warn" });
+  }
 }
 
 function openCalendarDayDetail(email, date) {
