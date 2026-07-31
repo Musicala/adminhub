@@ -1627,13 +1627,13 @@ async function renderAnnualCalendarTab() {
       </div>
     </section>
 
-    <section class="kpiGrid wide">
+    ${isCurrentUserAdmin() ? `<section class="kpiGrid wide">
       ${kpiCard("Horas efectivas", minutesToHhmm(stats.effectiveMinutes), "almuerzo ya descontado", "info")}
       ${kpiCard("Días con jornada", stats.workDays, "en el año seleccionado", "ok")}
       ${kpiCard("Días sin jornada", stats.freeDays, "incluye descansos y festivos", "")}
       ${kpiCard("Semanas incompletas", stats.incompleteWeeks, `de ${stats.scheduledWeeks} con jornada · meta vigente ${minutesToHhmm(stats.targetMin)}/sem`, stats.incompleteWeeks ? "warn" : "ok")}
       ${kpiCard("Excepciones", stats.overrideDays, "cambios por fecha", stats.overrideDays ? "info" : "")}
-    </section>
+    </section>` : ""}
 
     ${contractBanner}
 
