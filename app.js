@@ -1619,7 +1619,7 @@ async function renderAnnualCalendarTab() {
       <div>
         <p class="dashEyebrow">Jornadas de trabajo</p>
         <h2 class="dashTitle">Horario anual de ${escapeHtml(activeMember.name)}</h2>
-        <p class="dashSub">Horas efectivas (jornadas &gt;6h descuentan 1h de almuerzo). Cada semana Lun–Sáb indica si cumple la meta; los festivos y días libres reducen la meta de esa semana y las semanas en dos meses se cuentan completas.</p>
+        <p class="dashSub">${isCurrentUserAdmin() ? "Horas efectivas (jornadas &gt;6h descuentan 1h de almuerzo). Cada semana Lun–Sáb indica si cumple la meta; los festivos y días libres reducen la meta de esa semana y las semanas en dos meses se cuentan completas." : `Aquí está tu horario de todo el ${CALENDAR_YEAR}: tus jornadas, tus días libres y los festivos. Dale una mirada con calma y, si ves algo que no cuadra o tienes dudas, escríbenos y lo revisamos juntos. 💙`}</p>
       </div>
       <div class="headActions">
         ${isCurrentUserAdmin() ? `<label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="cal-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === activeMember.email ? "selected" : ""}>${escapeHtml(m.name)}${isAdminEmail(m.email) ? " (admin)" : ""}</option>`).join("")}</select></label>` : ""}
