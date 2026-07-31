@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-31.1";
+const BUILD = "2026-07-31.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -37,7 +37,6 @@ const HUB = {
   name: "Musicala Admin Hub",
   subtitle: "Centro administrativo",
   GENERAL_LINKS: {
-    nomina: "https://docs.google.com/forms/d/e/1FAIpQLSeMOhoY9d8JOf1Oq8DnD_aSEDkBmOXmzYJtlCCU-7CNVYjnLA/viewform",
     apertura: "https://musicala.github.io/protocolodeapertura/",
     reglamento: "https://drive.google.com/file/d/1Oda0c_FnHrsgME2GE8LCb7z5huH-YbBk/view"
   },
@@ -64,7 +63,6 @@ const HUB = {
   },
   // Accesos rápidos (links externos) que se muestran en el Inicio.
   QUICK_LINKS: [
-    { id: "nomina", icon: "💰", title: "Novedades nomina", subtitle: "General" },
     { id: "apertura", icon: "🔑", title: "Protocolo de apertura", subtitle: "General" },
     { id: "reglamento", icon: "📜", title: "Reglamento interno", subtitle: "General" },
     { id: "horario", icon: "🗓️", title: "Horario anual", subtitle: "Personal" },
