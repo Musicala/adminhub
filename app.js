@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-21.2";
+const BUILD = "2026-07-31.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -78,7 +78,8 @@ const COLLECTIONS = {
   hubLinks: "adminHubLinks",
   scheduleOverrides: "adminScheduleOverrides",
   hoursBank: "adminHoursBank",
-  hubSettings: "adminHubSettings"
+  hubSettings: "adminHubSettings",
+  emailAliases: "adminEmailAliases"
 };
 
 const LEGACY_ANNUAL_SCHEDULE_SOURCES = {
@@ -185,6 +186,7 @@ let AUTH = null;
 let DB = null;
 let ACTIVE_USER = null;
 let ACTIVE_EMAIL = "";
+let ACTIVE_ALIAS_EMAIL = ""; // correo con el que se inició sesión cuando es un acceso alterno
 let ACTIVE_PROFILE = null;
 let ACTIVE_LINKS = {};
 let toastTimer = null;
@@ -270,6 +272,22 @@ function safeEmailId(email) {
   return String(email || "").toLowerCase().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
 }
 
+/* Acceso alterno: un correo adicional puede entrar y ver la app con el perfil
+   de un miembro (util para pruebas o cuando la persona usa otra cuenta).
+   El mapeo vive en adminEmailAliases/{correo alterno} -> { memberEmail }. */
+async function resolveAliasEmail(email) {
+  if (!email) return "";
+  try {
+    const snap = await getDoc(doc(DB, COLLECTIONS.emailAliases, email));
+    if (!snap.exists()) return "";
+    const target = String(snap.data()?.memberEmail || "").toLowerCase().trim();
+    return target && target !== email ? target : "";
+  } catch (error) {
+    console.warn("No se pudo consultar el acceso alterno", error);
+    return "";
+  }
+}
+
 function prettyName(user, fallbackEmail = "") {
   return user?.displayName || fallbackEmail || "Sesión activa";
 }
@@ -295,7 +313,10 @@ function buildLinksForUser(email) {
 }
 
 function getProfileName(email = ACTIVE_EMAIL) {
-  if (email === ACTIVE_EMAIL) return ACTIVE_PROFILE?.label || prettyName(ACTIVE_USER, ACTIVE_EMAIL);
+  if (email === ACTIVE_EMAIL) {
+    if (ACTIVE_ALIAS_EMAIL) return ACTIVE_PROFILE?.label || MEMBER_SETTINGS[email]?.name || email;
+    return ACTIVE_PROFILE?.label || prettyName(ACTIVE_USER, ACTIVE_EMAIL);
+  }
   return MEMBER_SETTINGS[email]?.name || HUB.USERS?.[email]?.label || email;
 }
 
@@ -539,6 +560,7 @@ function defaultSettingsFor(email, extra = {}) {
     defaultGraceMinutes: 5,
     weeklyTargetHours: DEFAULT_WEEKLY_TARGET_HOURS,
     weeklySchedule: defaultWeeklySchedule(),
+    altEmail: "",
     contractType: "indefinido",
     contractEndDate: "",
     ...extra
@@ -588,6 +610,7 @@ function normalizeSettings(data) {
   }
   return {
     email: String(data?.email || "").toLowerCase().trim(),
+    altEmail: String(data?.altEmail || "").toLowerCase().trim(),
     name: data?.name || "",
     role: data?.role === "admin" ? "admin" : "member",
     active: data?.active !== false,
@@ -3273,6 +3296,7 @@ function renderMemberSettings() {
         <div class="formGrid">
           <label class="field"><span class="fieldLabel">Nombre</span><input type="text" id="m-name" class="input" value="${escapeHtml(s.name || "")}"></label>
           <label class="field"><span class="fieldLabel">Correo</span><input type="text" class="input" value="${escapeHtml(s.email)}" disabled></label>
+          <label class="field"><span class="fieldLabel">Correo adicional (acceso alterno)</span><input type="email" id="m-alt-email" class="input" placeholder="opcional: otra cuenta que entra como este miembro" value="${escapeHtml(s.altEmail || "")}"></label>
           <label class="field"><span class="fieldLabel">Rol</span>
             <select id="m-role" class="input"><option value="member" ${s.role !== "admin" ? "selected" : ""}>Miembro</option><option value="admin" ${s.role === "admin" ? "selected" : ""}>Admin</option></select></label>
           <label class="field"><span class="fieldLabel">Gracia por defecto (min)</span><input type="number" id="m-grace" class="input" min="0" max="120" value="${s.defaultGraceMinutes}"></label>
@@ -3285,7 +3309,7 @@ function renderMemberSettings() {
         </div>
         <div class="modalActions" style="justify-content:flex-start;margin-top:4px">
           <button class="btnPrimary btnSmall" type="button" id="btn-save-general">Guardar datos generales</button>
-          <span class="modalNote" style="margin:0">Guarda nombre, rol, contrato y gracia sin tocar el horario.</span>
+          <span class="modalNote" style="margin:0">Guarda nombre, rol, contrato, correo adicional y gracia sin tocar el horario.</span>
         </div>
       </div>
 
@@ -3425,8 +3449,17 @@ async function saveMemberSettings() {
 async function saveMemberGeneral() {
   if (!isCurrentUserAdmin()) { toast("No tienes permisos.", { kind: "warn" }); return; }
   // Solo datos generales: no toca el horario ni las metas de horas.
+  const altEmail = String($("#m-alt-email")?.value || "").toLowerCase().trim();
+  if (altEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(altEmail)) {
+    toast("El correo adicional no es válido.", { kind: "warn" }); return;
+  }
+  if (altEmail && altEmail === CONFIG_EMAIL) {
+    toast("El correo adicional debe ser distinto al correo principal.", { kind: "warn" }); return;
+  }
+  const previousAlt = MEMBER_SETTINGS[CONFIG_EMAIL]?.altEmail || "";
   const payload = {
     email: CONFIG_EMAIL,
+    altEmail,
     name: $("#m-name").value.trim(),
     role: $("#m-role").value,
     active: $("#m-active").checked,
@@ -3441,6 +3474,16 @@ async function saveMemberGeneral() {
   if (!confirm("¿Guardar los datos generales de este miembro?")) return;
   try {
     await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
+    // El mapeo del acceso alterno vive aparte para que ese correo pueda resolverlo al entrar.
+    if (previousAlt && previousAlt !== altEmail) {
+      await deleteDoc(doc(DB, COLLECTIONS.emailAliases, previousAlt)).catch(() => {});
+    }
+    if (altEmail) {
+      await setDoc(doc(DB, COLLECTIONS.emailAliases, altEmail), {
+        aliasEmail: altEmail, memberEmail: CONFIG_EMAIL,
+        updatedAt: serverTimestamp(), updatedBy: ACTIVE_EMAIL
+      }, { merge: true });
+    }
     MEMBER_SETTINGS[CONFIG_EMAIL] = normalizeSettings({ ...MEMBER_SETTINGS[CONFIG_EMAIL], ...payload });
     toast("Datos generales guardados", { kind: "ok" });
     renderMemberSettings();
@@ -3961,20 +4004,29 @@ async function mount() {
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) {
-      ACTIVE_USER = null; ACTIVE_EMAIL = ""; ACTIVE_PROFILE = null; ACTIVE_LINKS = {};
+      ACTIVE_USER = null; ACTIVE_EMAIL = ""; ACTIVE_ALIAS_EMAIL = ""; ACTIVE_PROFILE = null; ACTIVE_LINKS = {};
       MEMBER_SETTINGS = {}; SCHEDULE_OVERRIDES = {}; HOURS_BANK = {}; DATA_LOADED = false;
       await closeModal(); show("login"); return;
     }
     const email = emailKey(user);
+    // Si el correo no está en el equipo, puede ser un acceso alterno de algún miembro.
+    let effectiveEmail = email;
+    let aliasEmail = "";
     if (HUB.USERS && Object.keys(HUB.USERS).length && !HUB.USERS[email]) {
-      toast("Tu correo no esta autorizado para este hub");
-      await signOut(auth).catch(() => null); show("login"); return;
+      const target = await resolveAliasEmail(email);
+      if (!target) {
+        toast("Tu correo no esta autorizado para este hub");
+        await signOut(auth).catch(() => null); show("login"); return;
+      }
+      effectiveEmail = target;
+      aliasEmail = email;
     }
-    ACTIVE_USER = user; ACTIVE_EMAIL = email;
-    ACTIVE_PROFILE = HUB.USERS?.[email] || null;
-    ACTIVE_LINKS = buildLinksForUser(email);
+    ACTIVE_USER = user; ACTIVE_EMAIL = effectiveEmail; ACTIVE_ALIAS_EMAIL = aliasEmail;
+    ACTIVE_PROFILE = HUB.USERS?.[effectiveEmail] || null;
+    ACTIVE_LINKS = buildLinksForUser(effectiveEmail);
     DATA_LOADED = false;
-    $("#user-line") && ($("#user-line").textContent = `${getProfileName()}${isCurrentUserAdmin() ? " · Admin" : ""} · v${BUILD}`);
+    const aliasNote = aliasEmail ? ` · Viendo como ${getProfileName(effectiveEmail)} (acceso alterno)` : "";
+    $("#user-line") && ($("#user-line").textContent = `${getProfileName()}${isCurrentUserAdmin() ? " · Admin" : ""}${aliasNote} · v${BUILD}`);
     show("app");
     await loadAdminData().catch(() => {});
     CURRENT_TAB = "inicio";

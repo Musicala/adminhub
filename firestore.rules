@@ -18,6 +18,18 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
+    // Acceso alterno: un correo adicional registrado por un admin actua como el
+    // miembro al que apunta (adminEmailAliases/{correo alterno}.memberEmail).
+    function aliasPath() {
+      return /databases/$(database)/documents/adminEmailAliases/$(userEmail());
+    }
+
+    function effectiveEmail() {
+      return signedIn() && exists(aliasPath())
+        ? get(aliasPath()).data.memberEmail
+        : userEmail();
+    }
+
     // Administradores: ven todo, configuran horarios y corrigen registros.
     function isAdmin() {
       return signedIn() && userEmail() in [
@@ -28,7 +40,7 @@ service cloud.firestore {
 
     // Equipo autorizado (lista blanca). Mantener sincronizado con HUB.USERS en app.js.
     function isTeam() {
-      return signedIn() && userEmail() in [
+      return signedIn() && effectiveEmail() in [
         'alekcaballeromusic@gmail.com',
         'catalina.medina.leal@gmail.com',
         'angiecamilar4@gmail.com',
@@ -51,12 +63,12 @@ service cloud.firestore {
     // la lista para que QR/remoto no falle cuando el equipo cambia.
     function writesOwnRecord() {
       return signedIn()
-        && request.resource.data.email == userEmail()
+        && request.resource.data.email == effectiveEmail()
         && request.resource.data.role == 'administrativo';
     }
 
     function readsOwnResource() {
-      return signedIn() && resource.data.email == userEmail();
+      return signedIn() && resource.data.email == effectiveEmail();
     }
 
     // ===== Manager Musicala =====
@@ -174,6 +186,14 @@ service cloud.firestore {
       allow read: if isTeam() || isAdmin();
       allow create, update: if isAdmin();
       allow delete: if false;
+    }
+
+    // ===== Accesos alternos (correo adicional por miembro) =====
+    match /adminEmailAliases/{aliasEmail} {
+      // Cada correo alterno lee el suyo para resolver a quien representa.
+      allow get: if isAdmin() || (signedIn() && aliasEmail == userEmail());
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     // ===== Excepciones de horario por fecha =====
