@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-07-31.2";
+const BUILD = "2026-08-04.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -282,6 +282,12 @@ async function resolveAliasEmail(email) {
     return target && target !== email ? target : "";
   } catch (error) {
     console.warn("No se pudo consultar el acceso alterno", error);
+    // Sin este mapeo la persona entra como un correo desconocido y la app le
+    // muestra el horario por defecto, como si no tuviera nada configurado.
+    // Avisamos en vez de fallar en silencio.
+    if (error?.code === "permission-denied") {
+      toast("Firestore negó el acceso alterno. Tu horario puede verse incompleto: avisa al administrador.", { kind: "warn" });
+    }
     return "";
   }
 }
@@ -467,32 +473,39 @@ async function loadAdminData({ force = false } = {}) {
   HOURS_BANK = {};
   HUB_LINKS = {};
   HUB_SETTINGS = { collectiveVacation: null };
-  try {
-    // Botones personalizados: todo el equipo los lee (la visibilidad fina se filtra en cliente).
-    const hl = await getDocs(collection(DB, COLLECTIONS.hubLinks)).catch(() => null);
-    hl?.forEach((d) => { HUB_LINKS[d.id] = normalizeHubLink(d.id, d.data()); });
-    const hs = await getDoc(doc(DB, COLLECTIONS.hubSettings, "general"));
-    HUB_SETTINGS = normalizeHubSettings(hs.exists() ? hs.data() : {});
-    if (isCurrentUserAdmin()) {
-      const ms = await getDocs(collection(DB, COLLECTIONS.memberSettings));
-      ms.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
-      const ov = await getDocs(collection(DB, COLLECTIONS.scheduleOverrides));
-      ov.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
-      const hb = await getDocs(collection(DB, COLLECTIONS.hoursBank));
-      hb.forEach((d) => { const data = normalizeHoursEntry(d.id, d.data()); if (data.email) HOURS_BANK[data.id] = data; });
-    } else if (ACTIVE_EMAIL) {
-      const sref = doc(DB, COLLECTIONS.memberSettings, safeEmailId(ACTIVE_EMAIL));
-      const ssnap = await getDoc(sref);
-      if (ssnap.exists()) MEMBER_SETTINGS[ACTIVE_EMAIL] = normalizeSettings(ssnap.data());
-      const oq = query(collection(DB, COLLECTIONS.scheduleOverrides), where("email", "==", ACTIVE_EMAIL));
-      const osnap = await getDocs(oq);
-      osnap.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
-      const hq = query(collection(DB, COLLECTIONS.hoursBank), where("email", "==", ACTIVE_EMAIL));
-      const hsnap = await getDocs(hq);
-      hsnap.forEach((d) => { const data = normalizeHoursEntry(d.id, d.data()); if (data.email) HOURS_BANK[data.id] = data; });
+  // Cada lectura va aislada: si las reglas de Firestore niegan una coleccion
+  // (p. ej. tras un deploy de reglas desde otra app), el resto igual se carga
+  // y avisamos, en vez de quedarnos en silencio con los horarios vacios.
+  const denied = [];
+  const safeRead = async (label, run) => {
+    try { return await run(); } catch (error) {
+      console.warn(`No se pudo leer ${label}`, error);
+      if (error?.code === "permission-denied") denied.push(label);
+      return null;
     }
-  } catch (error) {
-    console.warn("No se pudieron cargar configuraciones de horario", error);
+  };
+  // Botones personalizados: todo el equipo los lee (la visibilidad fina se filtra en cliente).
+  const hl = await safeRead("botones", () => getDocs(collection(DB, COLLECTIONS.hubLinks)));
+  hl?.forEach((d) => { HUB_LINKS[d.id] = normalizeHubLink(d.id, d.data()); });
+  const hs = await safeRead("ajustes generales", () => getDoc(doc(DB, COLLECTIONS.hubSettings, "general")));
+  HUB_SETTINGS = normalizeHubSettings(hs?.exists() ? hs.data() : {});
+  if (isCurrentUserAdmin()) {
+    const ms = await safeRead("horarios del equipo", () => getDocs(collection(DB, COLLECTIONS.memberSettings)));
+    ms?.forEach((d) => { const data = normalizeSettings(d.data()); if (data.email) MEMBER_SETTINGS[data.email] = data; });
+    const ov = await safeRead("excepciones de horario", () => getDocs(collection(DB, COLLECTIONS.scheduleOverrides)));
+    ov?.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
+    const hb = await safeRead("bolsa de horas", () => getDocs(collection(DB, COLLECTIONS.hoursBank)));
+    hb?.forEach((d) => { const data = normalizeHoursEntry(d.id, d.data()); if (data.email) HOURS_BANK[data.id] = data; });
+  } else if (ACTIVE_EMAIL) {
+    const ssnap = await safeRead("tu horario", () => getDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(ACTIVE_EMAIL))));
+    if (ssnap?.exists()) MEMBER_SETTINGS[ACTIVE_EMAIL] = normalizeSettings(ssnap.data());
+    const osnap = await safeRead("tus excepciones", () => getDocs(query(collection(DB, COLLECTIONS.scheduleOverrides), where("email", "==", ACTIVE_EMAIL))));
+    osnap?.forEach((d) => { const data = normalizeOverride(d.id, d.data()); if (data.email && data.date) SCHEDULE_OVERRIDES[`${data.email}__${data.date}`] = data; });
+    const hsnap = await safeRead("tu bolsa de horas", () => getDocs(query(collection(DB, COLLECTIONS.hoursBank), where("email", "==", ACTIVE_EMAIL))));
+    hsnap?.forEach((d) => { const data = normalizeHoursEntry(d.id, d.data()); if (data.email) HOURS_BANK[data.id] = data; });
+  }
+  if (denied.length) {
+    toast(`Firestore negó el acceso a: ${denied.join(", ")}. Revisa las reglas desplegadas.`, { kind: "warn" });
   }
   // Sembrar defaults en memoria para miembros del whitelist sin settings (no se escriben en Firestore).
   for (const email of Object.keys(HUB.USERS || {})) {
