@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-08-04.1";
+const BUILD = "2026-08-17.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -137,6 +137,19 @@ const DEFAULT_DAY = {
   graceMinutes: 5,
   notes: ""
 };
+
+/* Categorías que permiten convertir las novedades de horario en datos
+   comparables. `reason` conserva la explicación libre para el contexto. */
+const SCHEDULE_EVENT_REASONS = [
+  ["incapacidad", "Incapacidad"],
+  ["permiso", "Permiso autorizado"],
+  ["vacaciones", "Vacaciones"],
+  ["calamidad", "Calamidad / asunto personal"],
+  ["cita-medica", "Cita médica"],
+  ["cambio-horario", "Cambio de horario"],
+  ["otro", "Otro motivo"]
+];
+const SCHEDULE_EVENT_REASON_LABELS = Object.fromEntries(SCHEDULE_EVENT_REASONS);
 
 function defaultWeeklySchedule() {
   const out = {};
@@ -525,10 +538,27 @@ function normalizeOverride(id, data) {
     end: data?.end || DEFAULT_DAY.end,
     modality: data?.modality || "sede",
     graceMinutes: Number.isFinite(data?.graceMinutes) ? data.graceMinutes : 5,
+    eventReason: normalizeScheduleEventReason(data?.eventReason, data?.reason, enabled),
     reason: data?.reason || "",
     createdBy: data?.createdBy || "",
     createdAtClient: data?.createdAtClient || null
   };
+}
+
+function normalizeScheduleEventReason(value, note = "", enabled = false) {
+  if (SCHEDULE_EVENT_REASON_LABELS[value]) return value;
+  const legacy = String(note || "").toLowerCase();
+  if (legacy.includes("incapacidad")) return "incapacidad";
+  if (legacy.includes("vacacion")) return "vacaciones";
+  if (legacy.includes("calamidad")) return "calamidad";
+  if (legacy.includes("cita") || legacy.includes("médic") || legacy.includes("medic")) return "cita-medica";
+  if (legacy.includes("permiso")) return "permiso";
+  if (legacy.includes("cambio") || legacy.includes("horario") || enabled) return "cambio-horario";
+  return "otro";
+}
+
+function scheduleEventReasonLabel(eventReason) {
+  return SCHEDULE_EVENT_REASON_LABELS[eventReason] || SCHEDULE_EVENT_REASON_LABELS.otro;
 }
 
 /* Movimiento de bolsa de horas.
@@ -995,8 +1025,43 @@ function calculateStats(records, range) {
       .map((c) => ({ ...c, attendancePct: c.expected ? Math.round((c.worked / c.expected) * 100) : null }))
   );
 
+  // Las novedades se guardan por fecha, así que cada fila representa un día
+  // afectado. No se mezclan con ausencias sin aviso: estas son novedades
+  // autorizadas que retiraron o cambiaron una jornada.
+  const scheduleEvents = Object.values(SCHEDULE_OVERRIDES)
+    .filter((event) => event.date >= from && event.date <= to)
+    .filter((event) => memberFilter === "all" || event.email === memberFilter)
+    .map((event) => ({
+      ...event,
+      name: getProfileName(event.email),
+      eventReason: normalizeScheduleEventReason(event.eventReason, event.reason, event.enabled),
+      kind: event.enabled === false ? "absence" : "change"
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const absenceReasonMap = {};
+  const scheduleChangeMap = {};
+  for (const event of scheduleEvents) {
+    const map = event.kind === "absence" ? absenceReasonMap : scheduleChangeMap;
+    const key = event.eventReason;
+    if (!map[key]) map[key] = { reason: key, label: scheduleEventReasonLabel(key), count: 0, members: {} };
+    map[key].count++;
+    map[key].members[event.email] = (map[key].members[event.email] || 0) + 1;
+  }
+  const eventRows = (map) => Object.values(map)
+    .map((row) => ({ ...row, members: Object.entries(row.members)
+      .map(([email, count]) => ({ email, name: getProfileName(email), count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)) }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  const authorizedAbsences = scheduleEvents.filter((event) => event.kind === "absence").length;
+  const scheduleChanges = scheduleEvents.filter((event) => event.kind === "change").length;
+  global.authorizedAbsences = authorizedAbsences;
+  global.scheduleChanges = scheduleChanges;
+
   missingDetails.sort((a, b) => a.date < b.date ? 1 : -1);
-  return { global, memberRows, dayRows: Object.values(perDay), days, lateDetails, missingDetails, monthRows };
+  return {
+    global, memberRows, dayRows: Object.values(perDay), days, lateDetails, missingDetails, monthRows,
+    scheduleEvents, absenceReasonRows: eventRows(absenceReasonMap), scheduleChangeRows: eventRows(scheduleChangeMap)
+  };
 }
 
 function minutesToHhmmClock(min) {
@@ -2960,6 +3025,8 @@ function renderStatsUI() {
       ${kpiCard("Jornadas esperadas", g.expectedDays, `${g.registeredDays} registradas (${g.attendancePct}%)`, "")}
       ${kpiCard("Llegadas tarde", g.late, `prom. ${g.avgLateMinutes} min`, g.late ? "late" : "ok")}
       ${kpiCard("Ausencias", g.absent, "según horario", g.absent ? "absent" : "ok")}
+      ${kpiCard("Faltas autorizadas", g.authorizedAbsences, "por incapacidad, permiso, etc.", g.authorizedAbsences ? "info" : "ok")}
+      ${kpiCard("Cambios de horario", g.scheduleChanges, "novedades programadas", g.scheduleChanges ? "info" : "ok")}
       ${kpiCard("Jornadas incompletas", g.incompleteDays, "sin salida", g.incompleteDays ? "warn" : "ok")}
       ${kpiCard("Horas trabajadas", minutesToHhmm(g.totalWorkedMinutes), "efectivas · almuerzo descontado", "")}
       ${kpiCard("Horas programadas", minutesToHhmm(g.totalExpectedMinutes), `${g.expectedDays} jornadas · efectivas`, "info")}
@@ -2982,6 +3049,32 @@ function renderStatsUI() {
         ${worstByLate.length ? `<div class="rankList">${worstByLate.slice(0, 5).map((m, i) => rankRow(i + 1, m.name, m.late + " tarde", barHtml(maxPct(m.late, worstByLate[0].late), "late"))).join("")}</div>` : `<div class="emptyState">Sin llegadas tarde en el periodo. 👌</div>`}
       </section>
     </div>
+
+    <section class="dashSection card">
+      <h3 class="sectionH">📌 Faltas autorizadas por razón</h3>
+      <p class="sectionSub">Cuenta días retirados del horario mediante una novedad autorizada. Las ausencias sin aviso permanecen en “Ausencias”.</p>
+      ${stats.absenceReasonRows.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Razón</th><th>Días</th><th>Personas y veces</th></tr></thead>
+        <tbody>${stats.absenceReasonRows.map((row) => `<tr>
+          <td data-label="Razón"><strong>${escapeHtml(row.label)}</strong></td>
+          <td data-label="Días"><span class="badgeChip info">${row.count}</span></td>
+          <td data-label="Personas y veces">${row.members.map((member) => `${escapeHtml(member.name)} <strong>(${member.count})</strong>`).join(" · ")}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>` : `<div class="emptyState">No hay faltas autorizadas registradas en este periodo.</div>`}
+    </section>
+
+    <section class="dashSection card">
+      <h3 class="sectionH">🗓️ Cambios de horario por razón</h3>
+      <p class="sectionSub">Cuenta cada fecha cuyo horario fue cambiado; sirve para distinguir los ajustes operativos de las faltas.</p>
+      ${stats.scheduleChangeRows.length ? `<div class="tableWrap"><table class="dataTable">
+        <thead><tr><th>Razón</th><th>Fechas</th><th>Personas y veces</th></tr></thead>
+        <tbody>${stats.scheduleChangeRows.map((row) => `<tr>
+          <td data-label="Razón"><strong>${escapeHtml(row.label)}</strong></td>
+          <td data-label="Fechas"><span class="badgeChip info">${row.count}</span></td>
+          <td data-label="Personas y veces">${row.members.map((member) => `${escapeHtml(member.name)} <strong>(${member.count})</strong>`).join(" · ")}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>` : `<div class="emptyState">No hay cambios de horario registrados en este periodo.</div>`}
+    </section>
 
     <section class="dashSection">
       <h3 class="sectionH">🕓 Detalle de tardanzas</h3>
@@ -3104,6 +3197,7 @@ const STATS_PRESENTATION_OPTIONS = [
   ["kpis", "Indicadores principales", "Puntualidad, jornadas esperadas y llegadas tarde."],
   ["late", "Detalle de tardanzas", "Fechas, hora programada, llegada y retraso."],
   ["missing", "Jornadas sin registro", "Jornadas programadas que no tienen marcación."],
+  ["schedule-events", "Faltas y cambios autorizados", "Resumen por motivo y persona de las novedades de horario."],
   ["monthly", "Días trabajados por mes", "Registro frente a jornadas programadas."],
   ["members", "Resumen por miembro", "Comparativo de puntualidad del equipo."],
   ["daily", "Impacto diario", "Vista administrativa de la jornada por fecha."],
@@ -3154,6 +3248,7 @@ function openStatsPresentation(stats, range, selected) {
       </div>`) }
       ${section("late", "Detalle de tardanzas", table(`<tr><th>Fecha</th><th>Miembro</th><th>Debía llegar</th><th>Llegó</th><th>Retraso</th></tr>`, stats.lateDetails.map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.expectedStart)}</td><td>${escapeHtml(d.arrival)}</td><td>${d.lateMinutes} min</td></tr>`).join(""), "No hubo llegadas tarde en este periodo."))}
       ${section("missing", "Jornadas programadas sin registro", table(`<tr><th>Fecha</th><th>Miembro</th><th>Horario programado</th><th>Modalidad</th></tr>`, stats.missingDetails.map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.expectedStart)} – ${escapeHtml(d.expectedEnd)}</td><td>${escapeHtml(d.modality)}</td></tr>`).join(""), "No hay jornadas programadas sin registro."))}
+      ${section("schedule-events", "Faltas y cambios autorizados", table(`<tr><th>Tipo</th><th>Razón</th><th>Días / fechas</th><th>Personas y veces</th></tr>`, [...stats.absenceReasonRows.map((row) => ({ ...row, type: "Falta autorizada", countLabel: "días" })), ...stats.scheduleChangeRows.map((row) => ({ ...row, type: "Cambio de horario", countLabel: "fechas" }))].map((row) => `<tr><td>${escapeHtml(row.type)}</td><td><strong>${escapeHtml(row.label)}</strong></td><td>${row.count} ${row.countLabel}</td><td>${row.members.map((member) => `${escapeHtml(member.name)} (${member.count})`).join(" · ")}</td></tr>`).join(""), "No hay novedades autorizadas en este periodo."))}
       ${section("monthly", "Días trabajados por mes", table(`<tr><th>Mes</th><th>Miembro</th><th>Registrados</th><th>Programados</th><th>Asistencia</th></tr>`, stats.monthRows.map((row) => `<tr><td>${escapeHtml(monthKeyLabel(row.month))}</td><td>${escapeHtml(row.name)}</td><td>${row.worked}</td><td>${row.expected}</td><td>${row.attendancePct ?? "-"}%</td></tr>`).join(""), "Sin datos en el periodo."))}
       ${section("members", "Resumen por miembro", table(`<tr><th>Miembro</th><th>Esperadas</th><th>Registradas</th><th>Puntuales</th><th>Tarde</th><th>Puntualidad</th></tr>`, stats.memberRows.map((m) => `<tr><td><strong>${escapeHtml(m.name)}</strong></td><td>${m.expected}</td><td>${m.registered}</td><td>${m.onTime}</td><td>${m.late}</td><td>${m.punctualityPct}%</td></tr>`).join(""), "Sin datos en el periodo."))}
       ${section("daily", "Impacto diario sobre la jornada", table(`<tr><th>Fecha</th><th>Programado</th><th>Trabajado</th><th>Cumplimiento</th><th>Tardanzas</th><th>Impacto</th></tr>`, stats.dayRows.slice().reverse().map((d) => `<tr><td><strong>${escapeHtml(d.date)}</strong></td><td>${minutesToHhmm(d.expectedMinutes)}</td><td>${minutesToHhmm(d.workedMinutes)}</td><td>${d.compliancePct}%</td><td>${minutesToHhmm(d.lateMinutes)}</td><td>${minutesToHhmm(d.impactMinutes)}</td></tr>`).join(""), "Sin datos en el periodo."))}
@@ -3204,6 +3299,7 @@ function copyStatsSummary(stats, r) {
     `Jornadas esperadas: ${g.expectedDays} · registradas: ${g.registeredDays} (${g.attendancePct}%)`,
     `Puntualidad global: ${g.punctualityPct}% · Puntuales: ${g.onTime} · Tarde: ${g.late}`,
     `Ausencias: ${g.absent} · Incompletas: ${g.incompleteDays} · Salidas tempranas: ${g.leftEarly}`,
+    `Faltas autorizadas: ${g.authorizedAbsences} · Cambios de horario: ${g.scheduleChanges}`,
     `Horas programadas: ${minutesToHhmm(g.totalExpectedMinutes)} · trabajadas: ${minutesToHhmm(g.totalWorkedMinutes)} · cumplimiento: ${g.compliancePct}% · balance: ${signedMinutesToHhmm(g.netBalanceMinutes)}`,
     `Impacto de puntualidad: ${minutesToHhmm(g.totalImpactMinutes)} (${g.totalLateMinutes} min tarde + ${g.totalEarlyLeaveMinutes} min por salidas tempranas)`,
     `Hora promedio de llegada: ${g.avgArrival}`
@@ -3213,7 +3309,8 @@ function copyStatsSummary(stats, r) {
 function copyStatsReport(stats, r, best) {
   const g = stats.global;
   const top = best.slice(0, 3).map((m) => `${m.name} (${m.punctualityPct}%)`).join(", ") || "sin datos";
-  const report = `Durante el periodo del ${r.from} al ${r.to} se esperaban ${g.expectedDays} jornadas. Se registraron ${g.registeredDays} (${g.attendancePct}% de asistencia), de las cuales ${g.completeDays} fueron jornadas completas. La puntualidad global fue del ${g.punctualityPct}%, con ${g.late} llegadas tarde (promedio de ${g.avgLateMinutes} minutos) y ${g.absent} ausencias. Se programaron ${minutesToHhmm(g.totalExpectedMinutes)} y se registraron ${minutesToHhmm(g.totalWorkedMinutes)}, para un cumplimiento horario del ${g.compliancePct}% y un balance de ${signedMinutesToHhmm(g.netBalanceMinutes)}. Tardanzas y salidas tempranas afectaron ${minutesToHhmm(g.totalImpactMinutes)}. Los miembros con mayor puntualidad fueron: ${top}.`;
+  const absenceReasons = stats.absenceReasonRows.map((row) => `${row.label}: ${row.count}`).join(", ") || "sin faltas autorizadas";
+  const report = `Durante el periodo del ${r.from} al ${r.to} se esperaban ${g.expectedDays} jornadas. Se registraron ${g.registeredDays} (${g.attendancePct}% de asistencia), de las cuales ${g.completeDays} fueron jornadas completas. La puntualidad global fue del ${g.punctualityPct}%, con ${g.late} llegadas tarde (promedio de ${g.avgLateMinutes} minutos) y ${g.absent} ausencias. Hubo ${g.authorizedAbsences} faltas autorizadas (${absenceReasons}) y ${g.scheduleChanges} cambios de horario. Se programaron ${minutesToHhmm(g.totalExpectedMinutes)} y se registraron ${minutesToHhmm(g.totalWorkedMinutes)}, para un cumplimiento horario del ${g.compliancePct}% y un balance de ${signedMinutesToHhmm(g.netBalanceMinutes)}. Tardanzas y salidas tempranas afectaron ${minutesToHhmm(g.totalImpactMinutes)}. Los miembros con mayor puntualidad fueron: ${top}.`;
   copyText(report, "Reporte copiado");
 }
 
@@ -3373,7 +3470,7 @@ function renderMemberSettings() {
           <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Día libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
           <td data-label="Horario">${o.enabled === false ? "—" : `${escapeHtml(o.start || "")} – ${escapeHtml(o.end || "")}`}</td>
           <td data-label="Modalidad">${escapeHtml(o.modality || "—")}</td>
-          <td data-label="Motivo">${escapeHtml(o.reason || "")}</td>
+          <td data-label="Motivo"><strong>${escapeHtml(scheduleEventReasonLabel(o.eventReason))}</strong>${o.reason ? `<br><small>${escapeHtml(o.reason)}</small>` : ""}</td>
           <td data-label="Acciones"><div class="tableActions">
             <button class="btnGhost btnSmall" type="button" data-edit-override="${escapeHtml(o.id || `${safeEmailId(o.email)}_${o.date}`)}">Editar</button>
             <button class="btnGhost btnSmall danger" type="button" data-delete-override="${escapeHtml(o.id || `${safeEmailId(o.email)}_${o.date}`)}">Eliminar</button>
@@ -3564,6 +3661,8 @@ function openOverrideModalV2(email, existingOverride = null) {
       <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : 5}"></label>
     </div>
     <label class="field checkField permanentCheck"><input type="checkbox" id="o-permanent" ${editing ? "disabled" : ""}> <span>Este es el nuevo horario permanente desde ahora</span></label>
+    <label class="field"><span class="fieldLabel">Tipo de novedad</span>
+      <select id="o-event-reason" class="input">${SCHEDULE_EVENT_REASONS.map(([value, label]) => `<option value="${value}" ${(existingOverride?.eventReason || (initialEnabled ? "cambio-horario" : "permiso")) === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
     <label class="field"><span class="fieldLabel">Motivo</span><input type="text" id="o-reason" class="input" placeholder="Ej: reunión externa autorizada" value="${escapeHtml(existingOverride?.reason || "")}"></label>
     <div class="modalActions"><button class="btnGhost" type="button" id="o-cancel">Cancelar</button><button class="btnPrimary" type="button" id="o-save">${editing ? "Guardar edicion" : "Guardar cambio"}</button></div>
   `);
@@ -3633,6 +3732,7 @@ function openOverrideModalV2(email, existingOverride = null) {
     const end = $("#o-end").value || DEFAULT_DAY.end;
     const modality = $("#o-modality").value;
     const graceMinutes = Number($("#o-grace").value) || 0;
+    const eventReason = $("#o-event-reason").value;
     const reason = $("#o-reason").value.trim();
     const permanent = enabled && $("#o-permanent").checked;
     const permanentDays = Array.from(new Set(dates.map(weekdayKeyForDate)));
@@ -3640,7 +3740,7 @@ function openOverrideModalV2(email, existingOverride = null) {
     try {
       for (const date of dates) {
         const payload = {
-          email, date, enabled, start, end, modality, graceMinutes, reason,
+          email, date, enabled, start, end, modality, graceMinutes, eventReason, reason,
           rangeStart: startDate, rangeEnd: endDate, weekdays: Array.from(allowedDays),
           createdBy: ACTIVE_EMAIL, createdAt: serverTimestamp(), createdAtClient: Date.now()
         };
