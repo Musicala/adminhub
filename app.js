@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-08-17.1";
+const BUILD = "2026-08-22.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -135,8 +135,19 @@ const DEFAULT_DAY = {
   end: "16:00",
   modality: "sede",
   graceMinutes: 5,
+  breakMinutes: 60,
   notes: ""
 };
+
+function legacyBreakMinutes(start, end) {
+  const startMinutes = toMinutes(start);
+  const endMinutes = toMinutes(end);
+  return startMinutes != null && endMinutes != null && endMinutes - startMinutes > 360 ? 60 : 0;
+}
+
+function normalizeBreakMinutes(value, fallback = 0) {
+  return Math.max(0, Math.min(480, Number.isFinite(value) ? Math.round(value) : fallback));
+}
 
 /* Categorías que permiten convertir las novedades de horario en datos
    comparables. `reason` conserva la explicación libre para el contexto. */
@@ -538,6 +549,7 @@ function normalizeOverride(id, data) {
     end: data?.end || DEFAULT_DAY.end,
     modality: data?.modality || "sede",
     graceMinutes: Number.isFinite(data?.graceMinutes) ? data.graceMinutes : 5,
+    breakMinutes: normalizeBreakMinutes(data?.breakMinutes, legacyBreakMinutes(data?.start, data?.end)),
     eventReason: normalizeScheduleEventReason(data?.eventReason, data?.reason, enabled),
     reason: data?.reason || "",
     createdBy: data?.createdBy || "",
@@ -646,6 +658,7 @@ function normalizeSettings(data) {
       end: day.end || DEFAULT_DAY.end,
       modality: day.modality || "sede",
       graceMinutes: Number.isFinite(day.graceMinutes) ? day.graceMinutes : (data?.defaultGraceMinutes ?? 5),
+      breakMinutes: normalizeBreakMinutes(day.breakMinutes, legacyBreakMinutes(day.start, day.end)),
       notes: day.notes || ""
     };
   }
@@ -761,6 +774,7 @@ function getExpectedScheduleForDate(email, date) {
       start: override.start, end: override.end,
       modality: override.modality || "sede",
       graceMinutes: Number.isFinite(override.graceMinutes) ? override.graceMinutes : 5,
+      breakMinutes: normalizeBreakMinutes(override.breakMinutes, legacyBreakMinutes(override.start, override.end)),
       reason: override.reason || ""
     };
   }
@@ -775,6 +789,7 @@ function getExpectedScheduleForDate(email, date) {
     start: day.start, end: day.end,
     modality: day.modality || "sede",
     graceMinutes: Number.isFinite(day.graceMinutes) ? day.graceMinutes : (settings.defaultGraceMinutes ?? 5),
+    breakMinutes: normalizeBreakMinutes(day.breakMinutes, legacyBreakMinutes(day.start, day.end)),
     notes: day.notes || ""
   };
 }
@@ -809,7 +824,7 @@ function calculateShiftStatus(record, schedule) {
 
   if (hasIngreso && hasSalida) {
     const wi = toMinutes(ingreso), ws = toMinutes(salida);
-    if (wi != null && ws != null) out.workedMinutes = effectiveDurationMinutes(Math.max(0, ws - wi));
+    if (wi != null && ws != null) out.workedMinutes = Math.max(0, ws - wi);
   }
 
   // Sin horario configurado para ese día
@@ -823,7 +838,12 @@ function calculateShiftStatus(record, schedule) {
   const startMin = toMinutes(schedule.start);
   const endMin = toMinutes(schedule.end);
   const grace = Number.isFinite(schedule.graceMinutes) ? schedule.graceMinutes : 5;
-  if (startMin != null && endMin != null) out.expectedMinutes = effectiveDurationMinutes(Math.max(0, endMin - startMin));
+  const breakMinutes = normalizeBreakMinutes(schedule.breakMinutes);
+  if (out.workedMinutes != null) out.workedMinutes = Math.max(0, out.workedMinutes - breakMinutes);
+  if (startMin != null && endMin != null) {
+    const scheduledMinutes = Math.max(0, endMin - startMin);
+    out.expectedMinutes = Math.max(0, scheduledMinutes - breakMinutes);
+  }
 
   if (!hasIngreso) {
     out.status = "ausente"; out.label = "Ausente"; out.isAbsent = true;
@@ -1484,12 +1504,7 @@ function effectiveShiftMinutes(schedule) {
   const start = toMinutes(schedule.start);
   const end = toMinutes(schedule.end);
   if (start == null || end == null || end <= start) return 0;
-  return effectiveDurationMinutes(end - start);
-}
-
-function effectiveDurationMinutes(rawMinutes) {
-  const raw = Math.max(0, Number(rawMinutes) || 0);
-  return Math.max(0, raw - (raw > 360 ? 60 : 0));
+  return Math.max(0, end - start - normalizeBreakMinutes(schedule.breakMinutes));
 }
 
 function calendarMembers() {
@@ -1514,11 +1529,10 @@ function annualCalendarStats(email, year) {
       const dayData = getCalendarDayForDate(email, date);
       const schedule = dayData.schedule;
       if (!schedule) { freeDays++; continue; }
-      const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
       workDays++;
       effectiveMinutes += effectiveShiftMinutes(schedule);
       if (schedule.source === "override") overrideDays++;
-      if (raw > 360) lunchDays++;
+      if (normalizeBreakMinutes(schedule.breakMinutes) > 0) lunchDays++;
     }
   }
   // Semanas incompletas: recorre semanas Lun–Dom cuyo lunes cae en el año.
@@ -1641,12 +1655,11 @@ function renderCalendarMonth(email, year, month) {
         cells.push(`<button class="annualDay free" type="button" data-date="${date}"><strong>${day}</strong><span>${escapeHtml(dayData.label || "Sin jornada")}</span></button>`);
         continue;
       }
-      const raw = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
       const isRemote = normalizeIdentity(schedule.modality) === "remoto";
       cells.push(`<button class="annualDay work${schedule.source === "override" ? " override" : ""}" type="button" data-date="${date}">
         <span class="annualDayHead"><strong>${day}</strong>${isRemote ? `<em class="remoteDayBadge" title="Esta jornada es remota">Remoto</em>` : ""}</span>
         <span class="annualDayHours"><span>${escapeHtml(hhmmTo12h(schedule.start))}</span><i aria-hidden="true">–</i><span>${escapeHtml(hhmmTo12h(schedule.end))}</span></span>
-        ${raw > 360 ? `<small>Incluye almuerzo</small>` : ""}
+        ${normalizeBreakMinutes(schedule.breakMinutes) > 0 ? `<small>Descanso: ${normalizeBreakMinutes(schedule.breakMinutes)} min</small>` : ""}
       </button>`);
     }
     if (!hasCurrentMonthDay) continue; // fila totalmente fuera del mes: se omite
@@ -1697,7 +1710,7 @@ async function renderAnnualCalendarTab() {
       <div>
         <p class="dashEyebrow">Jornadas de trabajo</p>
         <h2 class="dashTitle">Horario anual de ${escapeHtml(activeMember.name)}</h2>
-        <p class="dashSub">${isCurrentUserAdmin() ? "Horas efectivas (jornadas &gt;6h descuentan 1h de almuerzo). Cada semana Lun–Sáb indica si cumple la meta; los festivos y días libres reducen la meta de esa semana y las semanas en dos meses se cuentan completas." : `Aquí está tu horario de todo el ${CALENDAR_YEAR}: tus jornadas, tus días libres y los festivos. Dale una mirada con calma y, si ves algo que no cuadra o tienes dudas, escríbenos y lo revisamos juntos. 💙`}</p>
+        <p class="dashSub">${isCurrentUserAdmin() ? "Horas efectivas con el almuerzo o descanso configurado para cada jornada. Cada semana Lun–Sáb indica si cumple la meta; los festivos y días libres reducen la meta de esa semana y las semanas en dos meses se cuentan completas." : `Aquí está tu horario de todo el ${CALENDAR_YEAR}: tus jornadas, tus días libres y los festivos. Dale una mirada con calma y, si ves algo que no cuadra o tienes dudas, escríbenos y lo revisamos juntos. 💙`}</p>
       </div>
       <div class="headActions">
         ${isCurrentUserAdmin() ? `<label class="field inlineField"><span class="fieldLabel">Trabajador</span><select id="cal-member" class="input">${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === activeMember.email ? "selected" : ""}>${escapeHtml(m.name)}${isAdminEmail(m.email) ? " (admin)" : ""}</option>`).join("")}</select></label>` : ""}
@@ -1786,7 +1799,6 @@ function openCalendarDayDetail(email, date) {
     openModal("Sin jornada", `${name} · ${date}`, "Horario anual", `<p class="modalNote">${escapeHtml(dayData.label || "Este día no tiene jornada configurada para este trabajador.")}</p>`);
     return;
   }
-  const rawMinutes = Math.max(0, (toMinutes(schedule.end) || 0) - (toMinutes(schedule.start) || 0));
   openModal("Detalle de jornada", `${name} · ${date}`, "Horario anual", `
     <div class="detailGrid">
       ${detailItem("Ingreso", schedule.start)}
@@ -1794,7 +1806,7 @@ function openCalendarDayDetail(email, date) {
       ${detailItem("Horas efectivas", minutesToHhmm(effectiveShiftMinutes(schedule)))}
       ${detailItem("Modalidad", schedule.modality || "sede")}
       ${detailItem("Fuente", schedule.source === "override" ? "Excepción por fecha" : "Horario semanal")}
-      ${detailItem("Almuerzo", rawMinutes > 360 ? "Descuenta 1h" : "No descuenta")}
+      ${detailItem("Almuerzo / descanso", `${normalizeBreakMinutes(schedule.breakMinutes)} min`)}
     </div>
     ${(schedule.reason || schedule.notes) ? `<p class="noteBox">${escapeHtml(schedule.reason || schedule.notes)}</p>` : ""}
     ${isCurrentUserAdmin() ? `<div class="modalActions"><button class="btnPrimary" type="button" id="btn-edit-day-schedule">Editar este día</button></div>` : ""}
@@ -3147,7 +3159,7 @@ function renderStatsUI() {
 
     <section class="dashSection">
       <h3 class="sectionH">⏱️ Impacto diario sobre la jornada</h3>
-      <p class="sectionSub">Compara horas efectivas programadas y registradas. En jornadas mayores a 6h se descuenta 1h de almuerzo.</p>
+      <p class="sectionSub">Compara horas efectivas programadas y registradas, con el descanso configurado para cada jornada.</p>
       <div class="tableWrap"><table class="dataTable">
         <thead><tr><th>Fecha</th><th>Programado</th><th>Trabajado</th><th>Cumplimiento</th><th>Tardanzas</th><th>Salidas temp.</th><th>Impacto</th><th>Balance</th></tr></thead>
         <tbody>${stats.dayRows.slice().reverse().map((d) => `<tr>
@@ -3445,6 +3457,7 @@ function renderMemberSettings() {
               <label class="field mini"><span class="fieldLabel">Modalidad</span>
                 <select class="input day-modality">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${day.modality === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
               <label class="field mini"><span class="fieldLabel">Gracia</span><input type="number" class="input day-grace" min="0" max="120" value="${day.graceMinutes}"></label>
+              <label class="field mini"><span class="fieldLabel">Almuerzo / descanso (min)</span><input type="number" class="input day-break" min="0" max="480" step="1" value="${normalizeBreakMinutes(day.breakMinutes)}"></label>
             </div>
             <input type="text" class="input day-notes" placeholder="Notas (opcional)" value="${escapeHtml(day.notes || "")}">
           </div>`;
@@ -3464,11 +3477,12 @@ function renderMemberSettings() {
           .map(([v, l, c]) => `<button class="segBtn${OVERRIDES_FILTER === v ? " active" : ""}" type="button" data-ov-filter="${v}">${l} (${c})</button>`).join("")}
       </div>
       ${overrides.length ? `<div class="tableWrap"><table class="dataTable">
-        <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Modalidad</th><th>Motivo</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Estado</th><th>Horario</th><th>Descanso</th><th>Modalidad</th><th>Motivo</th><th>Acciones</th></tr></thead>
         <tbody>${overrides.map((o) => `<tr class="${o.date === today ? "rowToday" : (o.date >= weekStart && o.date <= weekEnd ? "rowWeek" : "")}">
           <td data-label="Fecha">${escapeHtml(o.date)}${o.date === today ? ` <span class="badgeChip info">Hoy</span>` : ""}</td>
           <td data-label="Estado">${o.enabled === false ? `<span class="badgeChip muted">Día libre</span>` : `<span class="badgeChip info">Activa</span>`}</td>
           <td data-label="Horario">${o.enabled === false ? "—" : `${escapeHtml(o.start || "")} – ${escapeHtml(o.end || "")}`}</td>
+          <td data-label="Descanso">${o.enabled === false ? "—" : `${normalizeBreakMinutes(o.breakMinutes)} min`}</td>
           <td data-label="Modalidad">${escapeHtml(o.modality || "—")}</td>
           <td data-label="Motivo"><strong>${escapeHtml(scheduleEventReasonLabel(o.eventReason))}</strong>${o.reason ? `<br><small>${escapeHtml(o.reason)}</small>` : ""}</td>
           <td data-label="Acciones"><div class="tableActions">
@@ -3520,6 +3534,7 @@ async function saveMemberSettings() {
       end: $(".day-end", card).value || DEFAULT_DAY.end,
       modality: $(".day-modality", card).value,
       graceMinutes: Number($(".day-grace", card).value) || 0,
+      breakMinutes: normalizeBreakMinutes(Number($(".day-break", card).value)),
       notes: $(".day-notes", card).value.trim()
     };
   });
@@ -3659,6 +3674,7 @@ function openOverrideModalV2(email, existingOverride = null) {
       <label class="field"><span class="fieldLabel">Modalidad</span>
         <select id="o-modality" class="input">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${(existingOverride?.modality || "sede") === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
       <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : 5}"></label>
+      <label class="field"><span class="fieldLabel">Almuerzo / descanso (min)</span><input type="number" id="o-break" class="input" min="0" max="480" step="1" value="${normalizeBreakMinutes(existingOverride?.breakMinutes)}"></label>
     </div>
     <label class="field checkField permanentCheck"><input type="checkbox" id="o-permanent" ${editing ? "disabled" : ""}> <span>Este es el nuevo horario permanente desde ahora</span></label>
     <label class="field"><span class="fieldLabel">Tipo de novedad</span>
@@ -3701,7 +3717,7 @@ function openOverrideModalV2(email, existingOverride = null) {
 
   const syncEnabledFields = () => {
     const enabled = $("#o-enabled").checked;
-    ["#o-start", "#o-end", "#o-modality", "#o-grace"].forEach((sel) => {
+    ["#o-start", "#o-end", "#o-modality", "#o-grace", "#o-break"].forEach((sel) => {
       const el = $(sel);
       if (el) el.disabled = !enabled;
     });
@@ -3732,6 +3748,7 @@ function openOverrideModalV2(email, existingOverride = null) {
     const end = $("#o-end").value || DEFAULT_DAY.end;
     const modality = $("#o-modality").value;
     const graceMinutes = Number($("#o-grace").value) || 0;
+    const breakMinutes = normalizeBreakMinutes(Number($("#o-break").value));
     const eventReason = $("#o-event-reason").value;
     const reason = $("#o-reason").value.trim();
     const permanent = enabled && $("#o-permanent").checked;
@@ -3740,7 +3757,7 @@ function openOverrideModalV2(email, existingOverride = null) {
     try {
       for (const date of dates) {
         const payload = {
-          email, date, enabled, start, end, modality, graceMinutes, eventReason, reason,
+          email, date, enabled, start, end, modality, graceMinutes, breakMinutes, eventReason, reason,
           rangeStart: startDate, rangeEnd: endDate, weekdays: Array.from(allowedDays),
           createdBy: ACTIVE_EMAIL, createdAt: serverTimestamp(), createdAtClient: Date.now()
         };
@@ -3752,7 +3769,7 @@ function openOverrideModalV2(email, existingOverride = null) {
         const current = MEMBER_SETTINGS[email] || defaultSettingsFor(email, { seeded: true });
         const weeklySchedule = JSON.parse(JSON.stringify(current.weeklySchedule || defaultWeeklySchedule()));
         permanentDays.forEach((dayKey) => {
-          weeklySchedule[dayKey] = { ...(weeklySchedule[dayKey] || DEFAULT_DAY), enabled: true, start, end, modality, graceMinutes, notes: reason };
+          weeklySchedule[dayKey] = { ...(weeklySchedule[dayKey] || DEFAULT_DAY), enabled: true, start, end, modality, graceMinutes, breakMinutes, notes: reason };
         });
         const settingsPayload = {
           ...current,

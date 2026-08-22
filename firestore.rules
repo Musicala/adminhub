@@ -58,6 +58,56 @@ service cloud.firestore {
       ];
     }
 
+
+    // ===== Hub de docentes y calendario Wix =====
+    function baseHubEmail() {
+      return signedIn() && userEmail() in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com',
+        'emilybg0102@gmail.com',
+        'annitolad@gmail.com',
+        'lorenaduarte.404@gmail.com',
+        'malego2709@gmail.com',
+        'bagutierrezm@gmail.com',
+        'tiritiri.riri@gmail.com',
+        'darasaxcifuentes@gmail.com'
+      ];
+    }
+
+    function hubUserPath() {
+      return /databases/$(database)/documents/hubUsers/$(userEmail());
+    }
+
+    function hubManagedEnabled() {
+      return signedIn()
+        && exists(hubUserPath())
+        && get(hubUserPath()).data.enabled == true;
+    }
+
+    function hubManagedDisabled() {
+      return signedIn()
+        && exists(hubUserPath())
+        && get(hubUserPath()).data.enabled == false;
+    }
+
+    function isTeacherHubUser() {
+      return signedIn()
+        && (
+          (baseHubEmail() && !hubManagedDisabled())
+          || hubManagedEnabled()
+        );
+    }
+
+    // Comparte exactamente la misma lista de administradores que Compras Musicala.
+    function isAdminReader() {
+      return isComprasUser();
+    }
+
+    function readsOwnWixBooking() {
+      return isTeacherHubUser()
+        && resource.data.staffEmail == userEmail();
+    }
+
     // Un usuario autenticado escribe solo su propio registro de jornada por el flujo normal.
     // La app ya bloquea el acceso a correos fuera de HUB.USERS; aqui evitamos duplicar
     // la lista para que QR/remoto no falle cuando el equipo cambia.
@@ -216,6 +266,46 @@ service cloud.firestore {
       // Todo el equipo lee los botones; solo admins los crean/editan/eliminan.
       allow read: if isTeam();
       allow create, update, delete: if isAdmin();
+    }
+
+
+    // ===== Hub de docentes y calendario Wix =====
+    match /hubUsers/{userEmailId} {
+      allow get: if isAdminReader()
+        || (signedIn() && userEmailId == userEmail());
+      allow list: if isAdminReader();
+      allow create, update, delete: if isAdminReader();
+    }
+
+    match /calendarioWix/{bookingId} {
+      allow read: if isAdminReader() || readsOwnWixBooking();
+      allow create, update, delete: if isAdminReader();
+    }
+
+    match /calendarioWixSyncLogs/{logId} {
+      allow read: if isAdminReader();
+      allow create, update, delete: if false;
+    }
+
+    match /wixStaffMap/{staffKey} {
+      allow read, write: if isAdminReader();
+    }
+
+    match /wixStaffUnmatched/{staffKey} {
+      allow read, write: if isAdminReader();
+    }
+
+    match /roomAssignments/{assignmentId} {
+      allow read: if isTeacherHubUser() || isAdminReader();
+      allow create, update, delete: if isAdminReader();
+    }
+
+    match /calendarLastSeen/{userEmailId} {
+      allow read: if isAdminReader()
+        || (signedIn() && userEmailId == userEmail());
+      allow create, update: if signedIn()
+        && userEmailId == userEmail();
+      allow delete: if false;
     }
 
     // ===== Seguimiento de Compras (ruta aislada) =====
