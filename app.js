@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-08-22.2";
+const BUILD = "2026-08-27.2";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -671,6 +671,7 @@ function normalizeSettings(data) {
     canWorkRemote: Boolean(data?.canWorkRemote),
     hiddenTabs: Array.isArray(data?.hiddenTabs) ? data.hiddenTabs.filter((t) => typeof t === "string") : [],
     defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
+    graceHistory: normalizeGraceHistory(data?.graceHistory, data?.defaultGraceMinutes),
     lunchBreakMinutes: normalizeBreakMinutes(data?.lunchBreakMinutes, 60),
     weeklyTargetHours: Number.isFinite(data?.weeklyTargetHours) && data.weeklyTargetHours > 0 ? data.weeklyTargetHours : DEFAULT_WEEKLY_TARGET_HOURS,
     weeklyTargets: normalizeWeeklyTargets(data?.weeklyTargets),
@@ -681,6 +682,32 @@ function normalizeSettings(data) {
     updatedAtClient: data?.updatedAtClient || null,
     updatedBy: data?.updatedBy || ""
   };
+}
+
+/* Vigencias de la gracia general: una fila sin fecha aplica desde el inicio;
+   cada fila fechada reemplaza la anterior desde ese día en adelante. */
+function normalizeGraceHistory(raw, fallback = 5) {
+  const list = Array.isArray(raw) ? raw : [{ from: "", minutes: fallback }];
+  const out = list
+    .map((e) => ({
+      from: typeof e?.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(e.from) ? e.from : "",
+      minutes: Number.isFinite(e?.minutes) ? Math.max(0, Math.min(120, e.minutes)) : null
+    }))
+    .filter((e) => e.minutes != null);
+  if (!out.some((e) => !e.from)) out.unshift({ from: "", minutes: Number.isFinite(fallback) ? fallback : 5 });
+  out.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
+  return out;
+}
+
+function graceMinutesForDate(settings, day, date) {
+  const fallback = Number.isFinite(settings?.defaultGraceMinutes) ? settings.defaultGraceMinutes : 5;
+  // Un valor diario diferente de la gracia general es una excepción manual.
+  if (Number.isFinite(day?.graceMinutes) && day.graceMinutes !== fallback) return day.graceMinutes;
+  const history = settings?.graceHistory;
+  if (!Array.isArray(history) || !history.length) return Number.isFinite(day?.graceMinutes) ? day.graceMinutes : fallback;
+  let pick = history[0];
+  for (const entry of history) { if (!entry.from || entry.from <= date) pick = entry; else break; }
+  return pick.minutes;
 }
 
 function normalizeHubSettings(data) {
@@ -789,7 +816,7 @@ function getExpectedScheduleForDate(email, date) {
     source: "weekly",
     start: day.start, end: day.end,
     modality: day.modality || "sede",
-    graceMinutes: Number.isFinite(day.graceMinutes) ? day.graceMinutes : (settings.defaultGraceMinutes ?? 5),
+    graceMinutes: graceMinutesForDate(settings, day, date),
     breakMinutes: lunchBreakMinutesForShift(settings.lunchBreakMinutes, day.start, day.end),
     notes: day.notes || ""
   };
@@ -3385,6 +3412,16 @@ function targetRowHtml(t) {
   </div>`;
 }
 
+function graceHistoryRowHtml(rule) {
+  const from = rule?.from || "";
+  const minutes = Number.isFinite(rule?.minutes) ? rule.minutes : 5;
+  return `<div class="targetRow" data-grace-history-row>
+    <label class="field mini"><span class="fieldLabel">Desde</span><input type="date" class="input grace-history-from" value="${escapeHtml(from)}"></label>
+    <label class="field mini"><span class="fieldLabel">Gracia (min)</span><input type="number" class="input grace-history-minutes" min="0" max="120" value="${minutes}"></label>
+    <button class="btnGhost btnSmall danger grace-history-remove" type="button" title="Quitar">✕</button>
+  </div>`;
+}
+
 function renderMemberSettings() {
   const host = $("#cfg-body");
   if (!host) return;
@@ -3426,6 +3463,16 @@ function renderMemberSettings() {
           <label class="field"><span class="fieldLabel">Tipo de contrato</span><select id="m-contract-type" class="input"><option value="indefinido" ${s.contractType !== "fijo" ? "selected" : ""}>Indefinido</option><option value="fijo" ${s.contractType === "fijo" ? "selected" : ""}>Término fijo</option></select></label>
           <label class="field" id="m-contract-end-wrap" ${s.contractType === "fijo" ? "" : "hidden"}><span class="fieldLabel">Contrato vigente hasta</span><input type="date" id="m-contract-end" class="input" value="${escapeHtml(s.contractEndDate || "")}"></label>
         </div>
+        <div style="margin-top:12px">
+          <h3 class="sectionH" style="margin-bottom:4px">Vigencias de la gracia</h3>
+          <p class="modalNote">La fila sin fecha aplica desde el inicio. Agrega un cambio para que las marcaciones desde esa fecha usen otra gracia; las excepciones de horario por fecha conservan prioridad.</p>
+          <div class="targetRows" id="m-grace-history">
+            ${(s.graceHistory?.length ? s.graceHistory : [{ from: "", minutes: s.defaultGraceMinutes }]).map(graceHistoryRowHtml).join("")}
+          </div>
+          <div class="modalActions" style="justify-content:flex-start;margin-top:8px">
+            <button class="btnGhost btnSmall" type="button" id="btn-add-grace-history">+ Agregar cambio de gracia</button>
+          </div>
+        </div>
         <div class="cfgToggles">
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
           <label class="field checkField"><input type="checkbox" id="m-remote" ${s.canWorkRemote ? "checked" : ""}> <span>Puede marcar remoto</span></label>
@@ -3459,7 +3506,7 @@ function renderMemberSettings() {
               <label class="field mini"><span class="fieldLabel">Salida</span><input type="time" class="input day-end" value="${escapeHtml(day.end)}"></label>
               <label class="field mini"><span class="fieldLabel">Modalidad</span>
                 <select class="input day-modality">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${day.modality === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
-              <label class="field mini"><span class="fieldLabel">Gracia</span><input type="number" class="input day-grace" min="0" max="120" value="${day.graceMinutes}"></label>
+              <label class="field mini"><span class="fieldLabel">Gracia del día (excepción)</span><input type="number" class="input day-grace" min="0" max="120" value="${day.graceMinutes}"></label>
             </div>
             <input type="text" class="input day-notes" placeholder="Notas (opcional)" value="${escapeHtml(day.notes || "")}">
           </div>`;
@@ -3500,6 +3547,16 @@ function renderMemberSettings() {
   });
   $("#btn-add-target")?.addEventListener("click", () => {
     $("#m-targets")?.insertAdjacentHTML("beforeend", targetRowHtml({ from: "", hours: 42 }));
+  });
+  $("#btn-add-grace-history")?.addEventListener("click", () => {
+    $("#m-grace-history")?.insertAdjacentHTML("beforeend", graceHistoryRowHtml({ from: "", minutes: Number($("#m-grace")?.value) || 0 }));
+  });
+  $("#m-grace-history")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".grace-history-remove");
+    if (!btn) return;
+    const row = btn.closest("[data-grace-history-row]");
+    if (!$(".grace-history-from", row).value) { toast("La gracia base sin fecha no se puede quitar.", { kind: "warn" }); return; }
+    row.remove();
   });
   $("#m-targets")?.addEventListener("click", (e) => {
     const btn = e.target.closest(".tgt-remove");
@@ -3579,7 +3636,38 @@ async function saveMemberGeneral() {
   if (altEmail && altEmail === CONFIG_EMAIL) {
     toast("El correo adicional debe ser distinto al correo principal.", { kind: "warn" }); return;
   }
-  const previousAlt = MEMBER_SETTINGS[CONFIG_EMAIL]?.altEmail || "";
+  const previousSettings = MEMBER_SETTINGS[CONFIG_EMAIL] || defaultSettingsFor(CONFIG_EMAIL);
+  const previousAlt = previousSettings.altEmail || "";
+  const previousGraceMinutes = Number.isFinite(previousSettings.defaultGraceMinutes)
+    ? previousSettings.defaultGraceMinutes
+    : 5;
+  const defaultGraceMinutes = Number($("#m-grace").value) || 0;
+  const graceHistory = [];
+  let invalidGraceHistory = false;
+  $$("[data-grace-history-row]").forEach((row) => {
+    const from = $(".grace-history-from", row).value;
+    const minutes = Number($(".grace-history-minutes", row).value);
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > 120) { invalidGraceHistory = true; return; }
+    graceHistory.push({ from: from || "", minutes });
+  });
+  if (invalidGraceHistory || !graceHistory.some((entry) => !entry.from)) {
+    toast("Configura una gracia válida y conserva la fila base sin fecha.", { kind: "warn" }); return;
+  }
+  const datedGraceChanges = new Set();
+  if (graceHistory.some((entry) => entry.from && (datedGraceChanges.has(entry.from) || !datedGraceChanges.add(entry.from)))) {
+    toast("No repitas una fecha en los cambios de gracia.", { kind: "warn" }); return;
+  }
+  graceHistory.forEach((entry) => { if (!entry.from) entry.minutes = defaultGraceMinutes; });
+  graceHistory.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
+  // Los días inicialmente creados heredan la gracia general. Al cambiarla,
+  // sincronizamos únicamente los que aún tenían el valor general anterior;
+  // cualquier día ajustado manualmente conserva su excepción.
+  const weeklySchedule = Object.fromEntries(Object.entries(previousSettings.weeklySchedule || {}).map(([dayKey, day]) => [
+    dayKey,
+    Number.isFinite(day?.graceMinutes) && day.graceMinutes === previousGraceMinutes
+      ? { ...day, graceMinutes: defaultGraceMinutes }
+      : day
+  ]));
   const payload = {
     email: CONFIG_EMAIL,
     altEmail,
@@ -3589,7 +3677,9 @@ async function saveMemberGeneral() {
     canWorkRemote: $("#m-remote").checked,
     contractType: $("#m-contract-type").value === "fijo" ? "fijo" : "indefinido",
     contractEndDate: $("#m-contract-type").value === "fijo" ? $("#m-contract-end").value : "",
-    defaultGraceMinutes: Number($("#m-grace").value) || 0,
+    defaultGraceMinutes,
+    graceHistory,
+    weeklySchedule,
     lunchBreakMinutes: normalizeBreakMinutes(Number($("#m-lunch-break").value)),
     updatedAt: serverTimestamp(),
     updatedAtClient: Date.now(),

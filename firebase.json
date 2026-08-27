@@ -10,6 +10,7 @@
       ".git/**",
       ".agents/**",
       ".codex/**",
+      "*.bak-*",
       "node_modules/**",
       "README.md",
       "gas/**"
