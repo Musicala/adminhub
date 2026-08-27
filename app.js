@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-08-27.2";
+const BUILD = "2026-08-27.3";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -673,6 +673,7 @@ function normalizeSettings(data) {
     defaultGraceMinutes: Number.isFinite(data?.defaultGraceMinutes) ? data.defaultGraceMinutes : 5,
     graceHistory: normalizeGraceHistory(data?.graceHistory, data?.defaultGraceMinutes),
     lunchBreakMinutes: normalizeBreakMinutes(data?.lunchBreakMinutes, 60),
+    lunchBreakHistory: normalizeLunchBreakHistory(data?.lunchBreakHistory, data?.lunchBreakMinutes),
     weeklyTargetHours: Number.isFinite(data?.weeklyTargetHours) && data.weeklyTargetHours > 0 ? data.weeklyTargetHours : DEFAULT_WEEKLY_TARGET_HOURS,
     weeklyTargets: normalizeWeeklyTargets(data?.weeklyTargets),
     weekTargetOverrides: normalizeWeekTargetOverrides(data?.weekTargetOverrides),
@@ -705,6 +706,28 @@ function graceMinutesForDate(settings, day, date) {
   if (Number.isFinite(day?.graceMinutes) && day.graceMinutes !== fallback) return day.graceMinutes;
   const history = settings?.graceHistory;
   if (!Array.isArray(history) || !history.length) return Number.isFinite(day?.graceMinutes) ? day.graceMinutes : fallback;
+  let pick = history[0];
+  for (const entry of history) { if (!entry.from || entry.from <= date) pick = entry; else break; }
+  return pick.minutes;
+}
+
+function normalizeLunchBreakHistory(raw, fallback = 60) {
+  const list = Array.isArray(raw) ? raw : [{ from: "", minutes: fallback }];
+  const out = list
+    .map((e) => ({
+      from: typeof e?.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(e.from) ? e.from : "",
+      minutes: Number.isFinite(e?.minutes) ? Math.max(0, Math.min(480, Math.round(e.minutes))) : null
+    }))
+    .filter((e) => e.minutes != null);
+  if (!out.some((e) => !e.from)) out.unshift({ from: "", minutes: normalizeBreakMinutes(fallback, 60) });
+  out.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
+  return out;
+}
+
+function lunchBreakMinutesForDate(settings, date) {
+  const fallback = normalizeBreakMinutes(settings?.lunchBreakMinutes, 60);
+  const history = settings?.lunchBreakHistory;
+  if (!Array.isArray(history) || !history.length) return fallback;
   let pick = history[0];
   for (const entry of history) { if (!entry.from || entry.from <= date) pick = entry; else break; }
   return pick.minutes;
@@ -803,7 +826,7 @@ function getExpectedScheduleForDate(email, date) {
       start: override.start, end: override.end,
       modality: override.modality || "sede",
       graceMinutes: Number.isFinite(override.graceMinutes) ? override.graceMinutes : 5,
-      breakMinutes: lunchBreakMinutesForShift(settings?.lunchBreakMinutes, override.start, override.end),
+      breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutesForDate(settings, date), override.start, override.end),
       reason: override.reason || ""
     };
   }
@@ -817,7 +840,7 @@ function getExpectedScheduleForDate(email, date) {
     start: day.start, end: day.end,
     modality: day.modality || "sede",
     graceMinutes: graceMinutesForDate(settings, day, date),
-    breakMinutes: lunchBreakMinutesForShift(settings.lunchBreakMinutes, day.start, day.end),
+    breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutesForDate(settings, date), day.start, day.end),
     notes: day.notes || ""
   };
 }
@@ -1594,7 +1617,7 @@ function weeklyScheduleBaselineMinutes(email, date) {
   if (!settings || settings.active === false) return 0;
   const day = settings.weeklySchedule?.[weekdayKeyForDate(date)];
   if (!day || !day.enabled) return 0;
-  return effectiveShiftMinutes({ ...day, breakMinutes: lunchBreakMinutesForShift(settings.lunchBreakMinutes, day.start, day.end) });
+  return effectiveShiftMinutes({ ...day, breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutesForDate(settings, date), day.start, day.end) });
 }
 
 /* Horas efectivas de una semana real (Lun–Sáb) a partir del lunes que la inicia.
@@ -1711,8 +1734,8 @@ function getCalendarDayForDate(email, date) {
   const legacy = LEGACY_ANNUAL_CACHE[`${email}__${date.slice(0, 4)}`]?.[date];
   if (legacy) {
     if (legacy.source === "legacy-free") return { schedule: null, label: legacy.label || "Sin jornada" };
-    const lunchBreakMinutes = MEMBER_SETTINGS[email]?.lunchBreakMinutes;
-    return { schedule: { ...legacy, breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutes, legacy.start, legacy.end) }, label: "" };
+    const settings = MEMBER_SETTINGS[email];
+    return { schedule: { ...legacy, breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutesForDate(settings, date), legacy.start, legacy.end) }, label: "" };
   }
   return { schedule: getExpectedScheduleForDate(email, date), label: "" };
 }
@@ -3422,6 +3445,16 @@ function graceHistoryRowHtml(rule) {
   </div>`;
 }
 
+function lunchHistoryRowHtml(rule) {
+  const from = rule?.from || "";
+  const minutes = Number.isFinite(rule?.minutes) ? rule.minutes : 60;
+  return `<div class="targetRow" data-lunch-history-row>
+    <label class="field mini"><span class="fieldLabel">Desde</span><input type="date" class="input lunch-history-from" value="${escapeHtml(from)}"></label>
+    <label class="field mini"><span class="fieldLabel">Almuerzo (min)</span><input type="number" class="input lunch-history-minutes" min="0" max="480" value="${minutes}"></label>
+    <button class="btnGhost btnSmall danger lunch-history-remove" type="button" title="Quitar">✕</button>
+  </div>`;
+}
+
 function renderMemberSettings() {
   const host = $("#cfg-body");
   if (!host) return;
@@ -3471,6 +3504,16 @@ function renderMemberSettings() {
           </div>
           <div class="modalActions" style="justify-content:flex-start;margin-top:8px">
             <button class="btnGhost btnSmall" type="button" id="btn-add-grace-history">+ Agregar cambio de gracia</button>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <h3 class="sectionH" style="margin-bottom:4px">Vigencias del almuerzo</h3>
+          <p class="modalNote">La fila sin fecha aplica desde el inicio. Cada cambio se usa desde esa fecha en jornadas de más de 6 horas, incluso al consultar periodos anteriores.</p>
+          <div class="targetRows" id="m-lunch-history">
+            ${(s.lunchBreakHistory?.length ? s.lunchBreakHistory : [{ from: "", minutes: s.lunchBreakMinutes }]).map(lunchHistoryRowHtml).join("")}
+          </div>
+          <div class="modalActions" style="justify-content:flex-start;margin-top:8px">
+            <button class="btnGhost btnSmall" type="button" id="btn-add-lunch-history">+ Agregar cambio de almuerzo</button>
           </div>
         </div>
         <div class="cfgToggles">
@@ -3556,6 +3599,16 @@ function renderMemberSettings() {
     if (!btn) return;
     const row = btn.closest("[data-grace-history-row]");
     if (!$(".grace-history-from", row).value) { toast("La gracia base sin fecha no se puede quitar.", { kind: "warn" }); return; }
+    row.remove();
+  });
+  $("#btn-add-lunch-history")?.addEventListener("click", () => {
+    $("#m-lunch-history")?.insertAdjacentHTML("beforeend", lunchHistoryRowHtml({ from: "", minutes: Number($("#m-lunch-break")?.value) || 0 }));
+  });
+  $("#m-lunch-history")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".lunch-history-remove");
+    if (!btn) return;
+    const row = btn.closest("[data-lunch-history-row]");
+    if (!$(".lunch-history-from", row).value) { toast("El almuerzo base sin fecha no se puede quitar.", { kind: "warn" }); return; }
     row.remove();
   });
   $("#m-targets")?.addEventListener("click", (e) => {
@@ -3659,6 +3712,24 @@ async function saveMemberGeneral() {
   }
   graceHistory.forEach((entry) => { if (!entry.from) entry.minutes = defaultGraceMinutes; });
   graceHistory.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
+  const lunchBreakMinutes = normalizeBreakMinutes(Number($("#m-lunch-break").value));
+  const lunchBreakHistory = [];
+  let invalidLunchHistory = false;
+  $$("[data-lunch-history-row]").forEach((row) => {
+    const from = $(".lunch-history-from", row).value;
+    const minutes = Number($(".lunch-history-minutes", row).value);
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > 480) { invalidLunchHistory = true; return; }
+    lunchBreakHistory.push({ from: from || "", minutes: Math.round(minutes) });
+  });
+  if (invalidLunchHistory || !lunchBreakHistory.some((entry) => !entry.from)) {
+    toast("Configura un almuerzo válido y conserva la fila base sin fecha.", { kind: "warn" }); return;
+  }
+  const datedLunchChanges = new Set();
+  if (lunchBreakHistory.some((entry) => entry.from && (datedLunchChanges.has(entry.from) || !datedLunchChanges.add(entry.from)))) {
+    toast("No repitas una fecha en los cambios de almuerzo.", { kind: "warn" }); return;
+  }
+  lunchBreakHistory.forEach((entry) => { if (!entry.from) entry.minutes = lunchBreakMinutes; });
+  lunchBreakHistory.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
   // Los días inicialmente creados heredan la gracia general. Al cambiarla,
   // sincronizamos únicamente los que aún tenían el valor general anterior;
   // cualquier día ajustado manualmente conserva su excepción.
@@ -3680,7 +3751,8 @@ async function saveMemberGeneral() {
     defaultGraceMinutes,
     graceHistory,
     weeklySchedule,
-    lunchBreakMinutes: normalizeBreakMinutes(Number($("#m-lunch-break").value)),
+    lunchBreakMinutes,
+    lunchBreakHistory,
     updatedAt: serverTimestamp(),
     updatedAtClient: Date.now(),
     updatedBy: ACTIVE_EMAIL
