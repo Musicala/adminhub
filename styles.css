@@ -1595,6 +1595,7 @@ button[data-id="registrosJornada"] .ico{ background: rgba(104,13,191,.14); }
 .privateChatPick strong,.privateChatPick span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .privateChatPick span{ color:var(--muted); font-size:12px; }
 .privateChatCard{ display:grid; gap:12px; min-height:440px; }
+.privateChatEmpty{ align-self:center; margin:auto 0; }
 .privateMessages{ display:flex; flex-direction:column; gap:10px; max-height:520px; min-height:310px; overflow:auto; padding:4px; }
 .privateMessage{ align-self:flex-start; max-width:min(80%,620px); padding:10px 12px; border:1px solid var(--line); border-radius:14px 14px 14px 4px; background:var(--muteBg); }
 .privateMessage.mine{ align-self:flex-end; border-color:rgba(12,65,196,.25); border-radius:14px 14px 4px 14px; background:rgba(12,65,196,.09); }
