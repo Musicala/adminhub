@@ -1590,6 +1590,10 @@ button[data-id="registrosJornada"] .ico{ background: rgba(104,13,191,.14); }
 .privateChatLayout{ display:grid; grid-template-columns:minmax(210px,300px) minmax(0,1fr); gap:16px; align-items:start; }
 .privateInbox{ display:grid; gap:8px; padding:14px; background:var(--card2); border:1px solid var(--line); border-radius:var(--r2); box-shadow:var(--shadow2); }
 .privateInbox h3{ margin:0 0 4px; font-size:14px; }
+.privateStart{ display:grid; gap:7px; padding:10px 0 12px; border-bottom:1px solid var(--line); }
+.privateStart label{ font-size:12px; font-weight:750; color:var(--muted); }
+.privateStart select{ width:100%; min-width:0; }
+.privateStart .btnPrimary{ width:100%; }
 .privateChatPick{ display:grid; gap:4px; width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:12px; background:transparent; color:var(--text); text-align:left; cursor:pointer; }
 .privateChatPick:hover,.privateChatPick.active{ border-color:var(--a2); background:var(--muteBg); }
 .privateChatPick strong,.privateChatPick span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

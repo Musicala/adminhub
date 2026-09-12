@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-09-12.2";
+const BUILD = "2026-09-12.3";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -1357,12 +1357,20 @@ async function renderPrivateChatTab() {
   PRIVATE_CHAT_SELECTED_EMAIL = selectedEmail;
   const selectedChat = chats.find((chat) => chat.staffEmail === selectedEmail);
   const title = admin ? (selectedChat?.staffName || getProfileName(selectedEmail) || "Selecciona una conversación") : "Canal confidencial con Alek y Cata";
-  const inbox = admin ? `<aside class="privateInbox" aria-label="Conversaciones privadas"><h3>Conversaciones</h3>${chats.length ? chats.map((chat) => `<button type="button" class="privateChatPick${chat.staffEmail === selectedEmail ? " active" : ""}" data-private-chat="${escapeHtml(chat.staffEmail)}"><strong>${escapeHtml(chat.staffName || chat.staffEmail)}</strong><span>${escapeHtml(chat.lastMessage || "Sin mensajes")}</span></button>`).join("") : `<div class="emptyState small">Aún no hay reportes.</div>`}</aside>` : "";
+  const workerChoices = adminMemberList().filter((member) => !isAdminEmail(member.email));
+  const startChat = admin ? `<div class="privateStart"><label for="private-new-worker">Iniciar conversación</label><select id="private-new-worker"><option value="">Elige un trabajador…</option>${workerChoices.map((member) => `<option value="${escapeHtml(member.email)}">${escapeHtml(member.name)}</option>`).join("")}</select><button type="button" id="private-start-chat" class="btnPrimary btnSmall" ${workerChoices.length ? "" : "disabled"}>Abrir chat</button></div>` : "";
+  const inbox = admin ? `<aside class="privateInbox" aria-label="Conversaciones privadas"><h3>Conversaciones</h3>${startChat}${chats.length ? chats.map((chat) => `<button type="button" class="privateChatPick${chat.staffEmail === selectedEmail ? " active" : ""}" data-private-chat="${escapeHtml(chat.staffEmail)}"><strong>${escapeHtml(chat.staffName || chat.staffEmail)}</strong><span>${escapeHtml(chat.lastMessage || "Sin mensajes")}</span></button>`).join("") : `<div class="emptyState small">Aún no hay reportes.</div>`}</aside>` : "";
   const conversationBody = selectedEmail
     ? `<div id="private-chat-messages" class="privateMessages"><div class="loadingBlock">Cargando conversación…</div></div><form id="private-chat-form" class="privateChatForm"><label class="srOnly" for="private-chat-text">Mensaje privado</label><textarea id="private-chat-text" maxlength="4000" required placeholder="Escribe tu mensaje privado…"></textarea><button class="btnPrimary" type="submit">Enviar</button></form>`
     : `<div class="emptyState privateChatEmpty">Cuando un trabajador te escriba, su conversación aparecerá aquí para que Alek o Cata puedan responder.</div>`;
   setPanel(`<section class="privateChatPage"><div class="dashHead"><div><p class="dashEyebrow">Canal confidencial</p><h2 class="dashTitle">${escapeHtml(title)}</h2><p class="dashSub">${admin ? "Solo Alek y Cata tienen acceso a estas conversaciones." : "Este chat solo lo pueden ver Alek y Cata. No se comparte con el resto del equipo."}</p></div></div><div class="privateChatLayout">${inbox}<section class="privateChatCard card">${conversationBody}</section></div></section>`);
   $$("[data-private-chat]").forEach((button) => button.addEventListener("click", () => { PRIVATE_CHAT_SELECTED_EMAIL = button.dataset.privateChat || ""; renderPrivateChatTab(); }));
+  $("#private-start-chat")?.addEventListener("click", () => {
+    const workerEmail = $("#private-new-worker")?.value || "";
+    if (!workerEmail) { toast("Elige primero al trabajador con quien deseas hablar.", { kind: "warn" }); return; }
+    PRIVATE_CHAT_SELECTED_EMAIL = workerEmail;
+    renderPrivateChatTab();
+  });
   if (!selectedEmail) return;
   const messagesHost = $("#private-chat-messages");
   const messagesRef = collection(privateChatRef(selectedEmail), "messages");
