@@ -268,6 +268,38 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // ===== Chat confidencial de trabajadores =====
+    // Cada hilo usa como ID el correo efectivo del trabajador. Esto impide que
+    // cualquier integrante lea un hilo ajeno, incluso si conoce su ruta.
+    match /adminPrivateChats/{staffEmail} {
+      allow get: if isAdmin() || (isTeam() && staffEmail == effectiveEmail());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() || (
+        isTeam()
+        && staffEmail == effectiveEmail()
+        && request.resource.data.staffEmail == effectiveEmail()
+      );
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isAdmin() || (isTeam() && staffEmail == effectiveEmail());
+        // Los mensajes son inmutables. Un trabajador solo puede crear mensajes
+        // en su propio hilo; las respuestas quedan reservadas a Alek y Cata.
+        allow create: if (
+          isTeam()
+          && staffEmail == effectiveEmail()
+          && request.resource.data.staffEmail == effectiveEmail()
+          && request.resource.data.senderRole == 'worker'
+          && request.resource.data.senderEmail == userEmail()
+        ) || (
+          isAdmin()
+          && request.resource.data.senderRole == 'admin'
+          && request.resource.data.senderEmail == userEmail()
+        );
+        allow update, delete: if false;
+      }
+    }
+
 
     // ===== Hub de docentes y calendario Wix =====
     match /hubUsers/{userEmailId} {

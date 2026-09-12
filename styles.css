@@ -1586,6 +1586,27 @@ button[data-id="registrosJornada"] .ico{ background: rgba(104,13,191,.14); }
 
 .card{ background:var(--card2); border:1px solid var(--line); border-radius:var(--r2); padding:18px; box-shadow:var(--shadow2); }
 
+/* ===== Chat confidencial ===== */
+.privateChatLayout{ display:grid; grid-template-columns:minmax(210px,300px) minmax(0,1fr); gap:16px; align-items:start; }
+.privateInbox{ display:grid; gap:8px; padding:14px; background:var(--card2); border:1px solid var(--line); border-radius:var(--r2); box-shadow:var(--shadow2); }
+.privateInbox h3{ margin:0 0 4px; font-size:14px; }
+.privateChatPick{ display:grid; gap:4px; width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:12px; background:transparent; color:var(--text); text-align:left; cursor:pointer; }
+.privateChatPick:hover,.privateChatPick.active{ border-color:var(--a2); background:var(--muteBg); }
+.privateChatPick strong,.privateChatPick span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.privateChatPick span{ color:var(--muted); font-size:12px; }
+.privateChatCard{ display:grid; gap:12px; min-height:440px; }
+.privateMessages{ display:flex; flex-direction:column; gap:10px; max-height:520px; min-height:310px; overflow:auto; padding:4px; }
+.privateMessage{ align-self:flex-start; max-width:min(80%,620px); padding:10px 12px; border:1px solid var(--line); border-radius:14px 14px 14px 4px; background:var(--muteBg); }
+.privateMessage.mine{ align-self:flex-end; border-color:rgba(12,65,196,.25); border-radius:14px 14px 4px 14px; background:rgba(12,65,196,.09); }
+.privateMessageMeta{ display:flex; justify-content:space-between; gap:16px; font-size:11px; color:var(--muted); }
+.privateMessageMeta strong{ color:var(--text); }
+.privateMessage p{ margin:5px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.45; }
+.privateChatForm{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; border-top:1px solid var(--line); padding-top:12px; }
+.privateChatForm textarea{ min-height:72px; resize:vertical; }
+.srOnly{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+@media (max-width:720px){ .privateChatLayout{ grid-template-columns:1fr; } .privateInbox{ max-height:240px; overflow:auto; } .privateMessages{ max-height:420px; } }
+@media (max-width:440px){ .privateChatForm{ grid-template-columns:1fr; } .privateChatForm .btnPrimary{ width:100%; } .privateMessage{ max-width:92%; } }
+
 /* ===== KPI ===== */
 .kpiGrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 .kpiGrid.wide{ grid-template-columns:repeat(5,1fr); }

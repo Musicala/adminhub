@@ -15,7 +15,7 @@
    8. Auth + mount
 */
 
-const BUILD = "2026-08-27.3";
+const BUILD = "2026-09-12.1";
 const EMAIL_NOTIFICATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbzcDr4JLUUTZkdvNsNzod3NnqCXDMr449g99cT2et7P-EOzK-lnFZ-9p5y8R5O8Zd6e/exec";
 
 const firebaseConfig = {
@@ -77,7 +77,8 @@ const COLLECTIONS = {
   scheduleOverrides: "adminScheduleOverrides",
   hoursBank: "adminHoursBank",
   hubSettings: "adminHubSettings",
-  emailAliases: "adminEmailAliases"
+  emailAliases: "adminEmailAliases",
+  privateChats: "adminPrivateChats"
 };
 
 const LEGACY_ANNUAL_SCHEDULE_SOURCES = {
@@ -188,6 +189,7 @@ import {
   arrayUnion,
   getFirestore,
   collection,
+  addDoc,
   deleteDoc,
   deleteField,
   doc,
@@ -195,6 +197,7 @@ import {
   getDocs,
   limit,
   orderBy,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -227,6 +230,8 @@ let HOURS_BANK = {};          // id -> movimiento de bolsa de horas
 let HUB_LINKS = {};           // id -> botón de acceso rápido personalizado
 let HUB_SETTINGS = { collectiveVacation: null };
 let DATA_LOADED = false;
+let PRIVATE_CHAT_UNSUBSCRIBE = null;
+let PRIVATE_CHAT_SELECTED_EMAIL = "";
 
 /* ==========================================================================
    2. Utilidades
@@ -1254,12 +1259,13 @@ const TABS = [
   { id: "bolsa", label: "Bolsa de horas", admin: false },
   { id: "registros", label: "Registros", admin: false },
   { id: "stats", label: "Estadísticas", admin: false },
+  { id: "chat-privado", label: "Chat privado", admin: false },
   { id: "config", label: "Configuración", admin: true },
   { id: "equipo", label: "Equipo", admin: true }
 ];
 
 /* Secciones que un admin puede ocultar por miembro. "inicio" siempre queda visible. */
-const MEMBER_LOCKED_TABS = ["inicio"];
+const MEMBER_LOCKED_TABS = ["inicio", "chat-privado"];
 function memberConfigurableTabs() {
   return TABS.filter((t) => !t.admin && !MEMBER_LOCKED_TABS.includes(t.id));
 }
@@ -1293,6 +1299,7 @@ async function goTab(tab) {
   if (isTabHiddenFor(ACTIVE_EMAIL, tab)) { toast("Esta sección no está habilitada para tu usuario.", { kind: "warn" }); tab = "inicio"; }
   if (def?.memberOnly && isCurrentUserAdmin()) { tab = "inicio"; }
   CURRENT_TAB = tab;
+  if (tab !== "chat-privado") stopPrivateChatListener();
   renderNav();
   await stopQrScanner();
   const host = $("#panel-content");
@@ -1304,6 +1311,7 @@ async function goTab(tab) {
     case "bolsa": return renderHoursBankTab();
     case "registros": return renderRecordsTab();
     case "stats": return isCurrentUserAdmin() ? renderAdminStats() : renderMemberStats();
+    case "chat-privado": return renderPrivateChatTab();
     case "config": return renderConfigTab();
     case "equipo": return renderTeamTab();
     default: return renderDashboard();
@@ -1312,6 +1320,66 @@ async function goTab(tab) {
 
 function panel() { return $("#panel-content"); }
 function setPanel(html) { const p = panel(); if (p) p.innerHTML = html; }
+
+/* Chat confidencial: el ID del hilo es el correo del trabajador, para que las
+   reglas validen que solo ese trabajador o Alek/Cata lo puedan abrir. */
+function privateChatRef(email = ACTIVE_EMAIL) {
+  return doc(DB, COLLECTIONS.privateChats, String(email || "").toLowerCase().trim());
+}
+function stopPrivateChatListener() {
+  if (PRIVATE_CHAT_UNSUBSCRIBE) PRIVATE_CHAT_UNSUBSCRIBE();
+  PRIVATE_CHAT_UNSUBSCRIBE = null;
+}
+function privateMessageTime(message) {
+  const value = message?.createdAt?.toDate?.() || (message?.createdAtClient ? new Date(message.createdAtClient) : null);
+  return value && !Number.isNaN(value.getTime()) ? new Intl.DateTimeFormat("es-CO", { dateStyle: "short", timeStyle: "short", timeZone: "America/Bogota" }).format(value) : "Enviando…";
+}
+function privateChatMessagesHtml(messages) {
+  if (!messages.length) return `<div class="emptyState">Aún no hay mensajes. Cuéntanos lo que necesites con confianza.</div>`;
+  return messages.map((message) => {
+    const mine = message.senderEmail === emailKey(ACTIVE_USER);
+    const role = message.senderRole === "admin" ? "Administración" : "Trabajador/a";
+    return `<article class="privateMessage${mine ? " mine" : ""}"><div class="privateMessageMeta"><strong>${escapeHtml(mine ? "Tú" : (message.senderName || role))}</strong><span>${escapeHtml(privateMessageTime(message))}</span></div><p>${escapeHtml(message.text || "")}</p></article>`;
+  }).join("");
+}
+async function renderPrivateChatTab() {
+  stopPrivateChatListener();
+  const admin = isCurrentUserAdmin();
+  let selectedEmail = admin ? (PRIVATE_CHAT_SELECTED_EMAIL || "") : ACTIVE_EMAIL;
+  let chats = [];
+  if (admin) {
+    try {
+      const snap = await getDocs(collection(DB, COLLECTIONS.privateChats));
+      chats = snap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => (b.updatedAtClient || 0) - (a.updatedAtClient || 0));
+      if (!selectedEmail && chats[0]) selectedEmail = chats[0].staffEmail;
+    } catch (error) { console.error("No se pudieron cargar los chats privados", error); toast("No se pudieron cargar los chats privados.", { kind: "warn" }); }
+  }
+  PRIVATE_CHAT_SELECTED_EMAIL = selectedEmail;
+  const selectedChat = chats.find((chat) => chat.staffEmail === selectedEmail);
+  const title = admin ? (selectedChat?.staffName || getProfileName(selectedEmail) || "Selecciona una conversación") : "Canal confidencial con Alek y Cata";
+  const inbox = admin ? `<aside class="privateInbox" aria-label="Conversaciones privadas"><h3>Conversaciones</h3>${chats.length ? chats.map((chat) => `<button type="button" class="privateChatPick${chat.staffEmail === selectedEmail ? " active" : ""}" data-private-chat="${escapeHtml(chat.staffEmail)}"><strong>${escapeHtml(chat.staffName || chat.staffEmail)}</strong><span>${escapeHtml(chat.lastMessage || "Sin mensajes")}</span></button>`).join("") : `<div class="emptyState small">Aún no hay reportes.</div>`}</aside>` : "";
+  setPanel(`<section class="privateChatPage"><div class="dashHead"><div><p class="dashEyebrow">Canal confidencial</p><h2 class="dashTitle">${escapeHtml(title)}</h2><p class="dashSub">${admin ? "Solo Alek y Cata tienen acceso a estas conversaciones." : "Este chat solo lo pueden ver Alek y Cata. No se comparte con el resto del equipo."}</p></div></div><div class="privateChatLayout">${inbox}<section class="privateChatCard card"><div id="private-chat-messages" class="privateMessages"><div class="loadingBlock">Cargando conversación…</div></div>${selectedEmail ? `<form id="private-chat-form" class="privateChatForm"><label class="srOnly" for="private-chat-text">Mensaje privado</label><textarea id="private-chat-text" maxlength="4000" required placeholder="Escribe tu mensaje privado…"></textarea><button class="btnPrimary" type="submit">Enviar</button></form>` : `<div class="emptyState">Selecciona una conversación para responder.</div>`}</section></div></section>`);
+  $$("[data-private-chat]").forEach((button) => button.addEventListener("click", () => { PRIVATE_CHAT_SELECTED_EMAIL = button.dataset.privateChat || ""; renderPrivateChatTab(); }));
+  if (!selectedEmail) return;
+  const messagesHost = $("#private-chat-messages");
+  const messagesRef = collection(privateChatRef(selectedEmail), "messages");
+  PRIVATE_CHAT_UNSUBSCRIBE = onSnapshot(query(messagesRef, orderBy("createdAtClient", "asc")), (snap) => {
+    if (!messagesHost) return;
+    messagesHost.innerHTML = privateChatMessagesHtml(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
+    messagesHost.scrollTop = messagesHost.scrollHeight;
+  }, (error) => { console.error("No se pudieron leer los mensajes privados", error); if (messagesHost) messagesHost.innerHTML = `<div class="emptyState">No fue posible cargar esta conversación.</div>`; });
+  $("#private-chat-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault(); const input = $("#private-chat-text"); const text = input?.value.trim(); if (!text) return;
+    const submit = event.currentTarget.querySelector("button[type=submit]"); submit.disabled = true;
+    const now = Date.now(), senderRole = isCurrentUserAdmin() ? "admin" : "worker", senderEmail = emailKey(ACTIVE_USER), staffName = getProfileName(selectedEmail);
+    try {
+      await setDoc(privateChatRef(selectedEmail), { staffEmail: selectedEmail, staffName, createdAt: serverTimestamp(), createdAtClient: now, updatedAt: serverTimestamp(), updatedAtClient: now, lastMessage: text.slice(0, 180), lastSenderRole: senderRole }, { merge: true });
+      await addDoc(messagesRef, { text, staffEmail: selectedEmail, senderRole, senderName: getProfileName(), senderEmail, createdAt: serverTimestamp(), createdAtClient: now });
+      input.value = "";
+    } catch (error) { console.error("No se pudo enviar el mensaje privado", error); toast("No se pudo enviar el mensaje. Intenta de nuevo.", { kind: "warn" }); }
+    finally { submit.disabled = false; }
+  });
+}
 
 /* ==========================================================================
    6a. Vista: Inicio / Dashboard
@@ -4295,6 +4363,7 @@ async function mount() {
     if (!user) {
       ACTIVE_USER = null; ACTIVE_EMAIL = ""; ACTIVE_ALIAS_EMAIL = ""; ACTIVE_PROFILE = null; ACTIVE_LINKS = {};
       MEMBER_SETTINGS = {}; SCHEDULE_OVERRIDES = {}; HOURS_BANK = {}; DATA_LOADED = false;
+      stopPrivateChatListener(); PRIVATE_CHAT_SELECTED_EMAIL = "";
       await closeModal(); show("login"); return;
     }
     const email = emailKey(user);
