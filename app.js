@@ -623,6 +623,8 @@ function defaultSettingsFor(email, extra = {}) {
     altEmail: "",
     contractType: "indefinido",
     contractEndDate: "",
+    endDate: "",
+    endReason: "",
     ...extra
   };
 }
@@ -689,6 +691,8 @@ function normalizeSettings(data) {
     weeklySchedule: weekly,
     contractType: data?.contractType === "fijo" ? "fijo" : "indefinido",
     contractEndDate: typeof data?.contractEndDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.contractEndDate) ? data.contractEndDate : "",
+    endDate: typeof data?.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.endDate) ? data.endDate : "",
+    endReason: typeof data?.endReason === "string" ? data.endReason : "",
     updatedAtClient: data?.updatedAtClient || null,
     updatedBy: data?.updatedBy || ""
   };
@@ -819,6 +823,26 @@ function getScheduleOverride(email, date) {
   return SCHEDULE_OVERRIDES[`${email}__${date}`] || null;
 }
 
+/* Retiro del equipo: endDate es la última fecha trabajada. Desde el día
+   siguiente la persona pierde el acceso al hub y deja de tener jornada
+   esperada, pero todo su historial se conserva intacto. */
+function memberEndDate(email) {
+  const end = MEMBER_SETTINGS[email]?.endDate || "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(end) ? end : "";
+}
+
+function isMemberRetiredOn(email, date) {
+  const end = memberEndDate(email);
+  return Boolean(end) && date > end;
+}
+
+/* Puede entrar al hub hoy: ni desactivado ni retirado. */
+function memberHasHubAccess(email) {
+  const settings = MEMBER_SETTINGS[email];
+  if (settings?.active === false) return false;
+  return !isMemberRetiredOn(email, todayBogota());
+}
+
 /* Contrato a término fijo: el horario semanal deja de aplicar después de la
    fecha de finalización, evitando que se proyecte continuidad a años futuros.
    Devuelve true si la fecha está cubierta por el contrato. */
@@ -832,6 +856,8 @@ function contractCoversDate(email, date) {
 /* Prioridad: excepción por fecha -> horario semanal -> sin horario (null). */
 function getExpectedScheduleForDate(email, date) {
   const settings = MEMBER_SETTINGS[email];
+  // Después del retiro no hay jornada esperada: ni excepciones ni horario semanal.
+  if (isMemberRetiredOn(email, date)) return null;
   const override = getScheduleOverride(email, date);
   if (override) {
     if (override.enabled === false) return null; // día libre por excepción
@@ -1164,8 +1190,19 @@ function adminMemberList() {
   const emails = new Set([...Object.keys(HUB.USERS || {}), ...Object.keys(MEMBER_SETTINGS)]);
   return Array.from(emails).map((email) => {
     const s = MEMBER_SETTINGS[email] || defaultSettingsFor(email, { seeded: true });
-    return { email, name: s.name || HUB.USERS?.[email]?.label || email, settings: s, active: s.active !== false };
+    return {
+      email, name: s.name || HUB.USERS?.[email]?.label || email, settings: s,
+      active: s.active !== false,
+      endDate: /^\d{4}-\d{2}-\d{2}$/.test(s.endDate || "") ? s.endDate : "",
+      retired: isMemberRetiredOn(email, todayBogota())
+    };
   }).filter((m) => m.active).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/* Quienes siguen vinculadas hoy. Las retiradas permanecen en estadísticas e
+   historial, pero salen de los tableros y selectores del día a día. */
+function currentMemberList() {
+  return adminMemberList().filter((m) => !m.retired);
 }
 
 function statsMemberList() {
@@ -1368,7 +1405,7 @@ async function renderPrivateChatTab() {
   const selectedName = admin ? (selectedChat?.staffName || getProfileName(selectedEmail) || "Selecciona una conversación") : "Canal confidencial con Alek y Cata";
   const title = selectedName;
   const selectedInitials = selectedName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "M";
-  const workerChoices = adminMemberList().filter((member) => !isAdminEmail(member.email));
+  const workerChoices = currentMemberList().filter((member) => !isAdminEmail(member.email));
   const startChat = admin ? `<div class="privateStart"><label for="private-new-worker">✦ Iniciar conversación</label><select id="private-new-worker"><option value="">Elige un trabajador…</option>${workerChoices.map((member) => `<option value="${escapeHtml(member.email)}">${escapeHtml(member.name)}</option>`).join("")}</select><button type="button" id="private-start-chat" class="btnPrimary btnSmall" ${workerChoices.length ? "" : "disabled"}>Abrir chat <span aria-hidden="true">→</span></button></div>` : "";
   const inbox = admin ? `<aside class="privateInbox" aria-label="Conversaciones privadas"><div class="privateInboxHead"><div><span>INBOX PRIVADO</span><h3>Conversaciones</h3></div><b>${chats.length}</b></div>${startChat}${chats.length ? chats.map((chat) => `<button type="button" class="privateChatPick${chat.staffEmail === selectedEmail ? " active" : ""}" data-private-chat="${escapeHtml(chat.staffEmail)}"><i>${escapeHtml((chat.staffName || chat.staffEmail).slice(0, 1).toUpperCase())}</i><span><strong>${escapeHtml(chat.staffName || chat.staffEmail)}</strong><em>${escapeHtml(chat.lastMessage || "Sin mensajes")}</em></span></button>`).join("") : `<div class="emptyState small">Aún no hay reportes.</div>`}</aside>` : "";
   const conversationBody = selectedEmail
@@ -1489,7 +1526,7 @@ function renderMemberDashboard(records, date) {
 }
 
 function renderAdminDashboard(records, date) {
-  const members = statsMemberList();
+  const members = currentMemberList().filter((m) => !isAdminEmail(m.email));
   const todayRecs = records.filter((r) => r.date === date);
   const byEmail = {}; todayRecs.forEach((r) => { byEmail[r.email] = r; });
 
@@ -1705,6 +1742,7 @@ function annualCalendarStats(email, year) {
 function weeklyScheduleBaselineMinutes(email, date) {
   const settings = MEMBER_SETTINGS[email];
   if (!settings || settings.active === false) return 0;
+  if (isMemberRetiredOn(email, date)) return 0;
   const day = settings.weeklySchedule?.[weekdayKeyForDate(date)];
   if (!day || !day.enabled) return 0;
   return effectiveShiftMinutes({ ...day, breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutesForDate(settings, date), day.start, day.end) });
@@ -3488,7 +3526,7 @@ async function renderConfigTab() {
     <section class="filtersBar card">
       <label class="field"><span class="fieldLabel">Miembro</span>
         <select id="cfg-member" class="input">
-          ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
+          ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}${m.retired ? ` · retirada el ${escapeHtml(m.endDate)}` : ""}</option>`).join("")}
         </select></label>
       <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepción / cambio de horario</button>
     </section>
@@ -3585,6 +3623,8 @@ function renderMemberSettings() {
           <label class="field"><span class="fieldLabel">Almuerzo para jornadas de más de 6 h (min)</span><input type="number" id="m-lunch-break" class="input" min="0" max="480" step="1" value="${normalizeBreakMinutes(s.lunchBreakMinutes, 60)}"></label>
           <label class="field"><span class="fieldLabel">Tipo de contrato</span><select id="m-contract-type" class="input"><option value="indefinido" ${s.contractType !== "fijo" ? "selected" : ""}>Indefinido</option><option value="fijo" ${s.contractType === "fijo" ? "selected" : ""}>Término fijo</option></select></label>
           <label class="field" id="m-contract-end-wrap" ${s.contractType === "fijo" ? "" : "hidden"}><span class="fieldLabel">Contrato vigente hasta</span><input type="date" id="m-contract-end" class="input" value="${escapeHtml(s.contractEndDate || "")}"></label>
+          <label class="field"><span class="fieldLabel">Último día de trabajo (retiro)</span><input type="date" id="m-end-date" class="input" value="${escapeHtml(s.endDate || "")}"></label>
+          <label class="field"><span class="fieldLabel">Motivo del retiro</span><input type="text" id="m-end-reason" class="input" placeholder="Ej: renuncia voluntaria" value="${escapeHtml(s.endReason || "")}"></label>
         </div>
         <div style="margin-top:12px">
           <h3 class="sectionH" style="margin-bottom:4px">Vigencias de la gracia</h3>
@@ -3606,6 +3646,7 @@ function renderMemberSettings() {
             <button class="btnGhost btnSmall" type="button" id="btn-add-lunch-history">+ Agregar cambio de almuerzo</button>
           </div>
         </div>
+        <p class="modalNote">El último día de trabajo cierra el vínculo: desde el día siguiente esta persona no puede entrar al hub ni tiene jornada esperada, y su historial se conserva completo. Déjalo vacío si sigue trabajando.${s.endDate ? ` Hoy figura como retirada desde el ${escapeHtml(s.endDate)}.` : ""}</p>
         <div class="cfgToggles">
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
           <label class="field checkField"><input type="checkbox" id="m-remote" ${s.canWorkRemote ? "checked" : ""}> <span>Puede marcar remoto</span></label>
@@ -3784,6 +3825,10 @@ async function saveMemberGeneral() {
   }
   const previousSettings = MEMBER_SETTINGS[CONFIG_EMAIL] || defaultSettingsFor(CONFIG_EMAIL);
   const previousAlt = previousSettings.altEmail || "";
+  const endDate = $("#m-end-date")?.value || "";
+  const endReason = ($("#m-end-reason")?.value || "").trim();
+  if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) { toast("La fecha de retiro no es válida.", { kind: "warn" }); return; }
+  if (endDate && isAdminEmail(CONFIG_EMAIL)) { toast("No puedes registrar el retiro de una cuenta admin.", { kind: "warn" }); return; }
   const defaultGraceMinutes = Number($("#m-grace").value) || 0;
   const graceHistory = [];
   let invalidGraceHistory = false;
@@ -3835,6 +3880,8 @@ async function saveMemberGeneral() {
     canWorkRemote: $("#m-remote").checked,
     contractType: $("#m-contract-type").value === "fijo" ? "fijo" : "indefinido",
     contractEndDate: $("#m-contract-type").value === "fijo" ? $("#m-contract-end").value : "",
+    endDate,
+    endReason: endDate ? endReason : "",
     defaultGraceMinutes,
     graceHistory,
     weeklySchedule,
@@ -3844,7 +3891,11 @@ async function saveMemberGeneral() {
     updatedAtClient: Date.now(),
     updatedBy: ACTIVE_EMAIL
   };
-  if (!confirm("¿Guardar los datos generales de este miembro?")) return;
+  const retiresNow = endDate && endDate !== (previousSettings.endDate || "");
+  const confirmMessage = retiresNow
+    ? `Vas a marcar el ${endDate} como último día de trabajo de ${$("#m-name").value.trim() || CONFIG_EMAIL}. Desde el día siguiente pierde el acceso al hub y deja de tener jornada esperada; su historial se conserva. ¿Guardar?`
+    : "¿Guardar los datos generales de este miembro?";
+  if (!confirm(confirmMessage)) return;
   try {
     await setDoc(doc(DB, COLLECTIONS.memberSettings, safeEmailId(CONFIG_EMAIL)), { ...payload, createdAt: serverTimestamp() }, { merge: true });
     // El mapeo del acceso alterno vive aparte para que ese correo pueda resolverlo al entrar.
@@ -4131,7 +4182,7 @@ async function renderTeamTab() {
             ${isAdminEmail(m.email) ? `<span class="badgeChip info memberRole">Admin</span>` : `<span class="badgeChip muted memberRole">Miembro</span>`}
           </div>
           <div class="memberMeta">
-            <span class="badgeChip ${s.active ? "ok" : "muted"}">${s.active ? "Activo" : "Inactivo"}</span>
+            <span class="badgeChip ${m.retired ? "muted" : (s.active ? "ok" : "muted")}">${m.retired ? `Retirada el ${escapeHtml(m.endDate)}` : (s.active ? "Activo" : "Inactivo")}</span>
             <span class="badgeChip ${s.canWorkRemote ? "info" : "muted"}">${s.canWorkRemote ? "Remoto ✓" : "Solo sede"}</span>
           </div>
           ${hasSchedule
@@ -4411,6 +4462,16 @@ async function mount() {
     $("#user-line") && ($("#user-line").textContent = `${getProfileName()}${isCurrentUserAdmin() ? " · Admin" : ""}${aliasNote} · v${BUILD}`);
     show("app");
     await loadAdminData().catch(() => {});
+    // Retiro o desactivación: se cierra la sesión en vez de dejar entrar al hub.
+    if (!isCurrentUserAdmin() && !memberHasHubAccess(ACTIVE_EMAIL)) {
+      const end = memberEndDate(ACTIVE_EMAIL);
+      ACTIVE_USER = null; ACTIVE_EMAIL = ""; ACTIVE_ALIAS_EMAIL = ""; ACTIVE_PROFILE = null; ACTIVE_LINKS = {};
+      MEMBER_SETTINGS = {}; SCHEDULE_OVERRIDES = {}; HOURS_BANK = {}; DATA_LOADED = false;
+      await signOut(auth).catch(() => null);
+      show("login");
+      toast(end ? `Tu acceso al hub finalizó el ${end}. Gracias por tu trabajo. 💙` : "Tu acceso al hub está desactivado.", { kind: "warn" });
+      return;
+    }
     CURRENT_TAB = "inicio";
     renderNav();
     goTab("inicio");

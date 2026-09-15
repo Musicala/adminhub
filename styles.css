@@ -70,6 +70,9 @@
 
 /* ===== Reset ===== */
 *{ box-sizing:border-box; }
+/* El atributo hidden siempre oculta: varias clases propias declaran display
+   (p. ej. .field{display:flex}) y ganaban por especificidad al [hidden] del navegador. */
+[hidden]{ display:none !important; }
 html,body{ height:100%; }
 img{ max-width:100%; display:block; }
 button{ font: inherit; }
