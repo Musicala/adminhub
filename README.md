@@ -67,9 +67,15 @@ El estado (puntual/tarde/etc.) **no se guarda**: se calcula siempre con
 **`adminMemberSettings`:**
 ```
 email, name, role ("admin"|"member"), active, canWorkRemote, defaultGraceMinutes,
-weeklySchedule: { monday..sunday: { enabled, start, end, modality, graceMinutes, notes } },
+graceHistory[] ({from, minutes}), endDate, endReason,
+weeklySchedule: { monday..sunday: { enabled, start, end, modality, graceMinutes,
+                 graceIsException, notes } },
 createdAt, updatedAt, updatedAtClient, updatedBy
 ```
+`active: false` y `endDate` (último día trabajado) son el interruptor de acceso:
+los lee la app **y** las reglas de Firestore. `graceIsException` marca que la
+gracia de ese día es una excepción manual; si es `false`, manda la vigencia
+general (`graceHistory`) de la fecha consultada.
 
 **`adminScheduleOverrides`:**
 ```
@@ -78,7 +84,15 @@ createdBy, createdAt, createdAtClient
 ```
 
 ## 5. Reglas de Firestore (resumen)
-- `isAdmin()` = los 2 correos administradores. `isTeam()` = lista blanca completa.
+- `isAdmin()` = los 2 correos administradores. `isTeam()` = lista blanca completa
+  **y** miembro habilitado (`memberEnabled()`).
+- `memberEnabled(correo)` lee `adminMemberSettings/{id}` y bloquea si `active == false`
+  o si ya pasó `endDate` (hora de Bogotá, el último día cuenta completo). Sin documento
+  de configuración nadie queda bloqueado, para no romper a un miembro recién agregado.
+  Los admins nunca se bloquean por estado.
+- Un miembro bloqueado conserva la lectura de **su propia** `adminMemberSettings`:
+  la app necesita ese dato para avisarle que su acceso terminó.
+- Pruebas: `tests/firestore-rules.test.mjs` (20 casos) contra el emulador.
 - `adminShiftRecords`: el miembro crea/actualiza **su** registro (flujo normal); el admin
   puede crear/actualizar cualquiera (correcciones). Lectura: dueño ve lo suyo, admin ve todo.
 - `adminMemberSettings` / `adminScheduleOverrides`: lectura propia o admin; escritura **solo admin**.
@@ -96,10 +110,15 @@ ingreso → `ausente`; ingreso sin salida → `incompleto`; salida antes de lo e
 1. **Publicar las reglas**: pega `firestore.rules` en Firebase Console → Firestore → Reglas → Publicar.
 2. **No requiere índices** nuevos (las consultas usan `orderBy("date")` + `where("email")`,
    que Firestore resuelve con índice simple; si pidiera un índice compuesto, usa el enlace del error).
-3. **Agregar/quitar miembros**: edítalos en `HUB.USERS` (app.js) **y** en `isTeam()` (firestore.rules).
+3. **Agregar miembros**: edítalos en `HUB.USERS` (app.js) **y** en `isTeam()` (firestore.rules).
    Para nuevos admins: agrégalos en `ADMIN_EMAILS` (app.js) **y** en `isAdmin()` (rules).
-4. **Apps Script**: sin cambios. El endpoint actual sigue recibiendo el mismo payload de ingreso.
-5. Las colecciones se crean solas al guardar el primer documento (no hay que crearlas a mano).
+4. **Dar de baja a alguien** (renuncia o retiro): NO hay que tocar código ni reglas.
+   En Configuración → datos generales del miembro, pon el **último día de trabajo**
+   (o desmarca **Miembro activo**) y guarda. Desde el día siguiente pierde el acceso
+   en la app y en Firestore, deja de tener jornada esperada y su historial se conserva
+   completo en registros, estadísticas y horario anual.
+5. **Apps Script**: sin cambios. El endpoint actual sigue recibiendo el mismo payload de ingreso.
+6. Las colecciones se crean solas al guardar el primer documento (no hay que crearlas a mano).
 
 ## 8. Cómo probar
 - **Login usuario normal** (ej. `licethrinconr@gmail.com`): ve Inicio (su estado), Marcar, Registros (solo los suyos).

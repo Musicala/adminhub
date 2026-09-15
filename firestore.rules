@@ -38,14 +38,54 @@ service cloud.firestore {
       ];
     }
 
+    // ===== Estado del miembro: interruptor de acceso desde la app =====
+    // Cuando un admin desmarca "Miembro activo" o registra el ultimo dia de
+    // trabajo en el hub, el acceso se corta aqui mismo. No hay que editar ni
+    // volver a publicar estas reglas cada vez que alguien se va.
+    function memberDocPath(email) {
+      return /databases/$(database)/documents/adminMemberSettings/$(email.replace('[^a-z0-9]+', '_'));
+    }
+
+    // "Ahora" en Bogota (UTC-5): el ultimo dia de trabajo cuenta completo.
+    function bogotaNow() {
+      return request.time - duration.value(5, 'h');
+    }
+
+    // endDate es la ultima fecha trabajada (YYYY-MM-DD). El acceso termina al
+    // cerrar ese dia, es decir 24 horas despues de su medianoche.
+    function isRetired(data) {
+      return data.get('endDate', '').matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && bogotaNow() > timestamp.date(
+             int(data.get('endDate', '').split('-')[0]),
+             int(data.get('endDate', '').split('-')[1]),
+             int(data.get('endDate', '').split('-')[2])
+           ) + duration.value(24, 'h');
+    }
+
+    // Sin documento de configuracion nadie queda bloqueado: un miembro nuevo
+    // entra igual que antes hasta que un admin le configure el horario.
+    function memberEnabled(email) {
+      return !exists(memberDocPath(email))
+        || (
+          get(memberDocPath(email)).data.get('active', true) != false
+          && !isRetired(get(memberDocPath(email)).data)
+        );
+    }
+
     // Equipo autorizado (lista blanca). Mantener sincronizado con HUB.USERS en app.js.
+    // Los admins nunca se bloquean por estado: asi un error de configuracion no
+    // puede dejar a Alek y Cata por fuera de su propio hub.
     function isTeam() {
-      return signedIn() && effectiveEmail() in [
-        'alekcaballeromusic@gmail.com',
-        'catalina.medina.leal@gmail.com',
-        'angiecamilar4@gmail.com',
-        'licethrinconr@gmail.com'
-      ];
+      return isAdmin() || (
+        signedIn()
+        && effectiveEmail() in [
+          'alekcaballeromusic@gmail.com',
+          'catalina.medina.leal@gmail.com',
+          'angiecamilar4@gmail.com',
+          'licethrinconr@gmail.com'
+        ]
+        && memberEnabled(effectiveEmail())
+      );
     }
 
     // Equipo de Seguimiento de Compras. Mantener sincronizado con ALLOWED_EMAILS en app.js de compras.
@@ -114,11 +154,19 @@ service cloud.firestore {
     function writesOwnRecord() {
       return signedIn()
         && request.resource.data.email == effectiveEmail()
-        && request.resource.data.role == 'administrativo';
+        && request.resource.data.role == 'administrativo'
+        && memberEnabled(effectiveEmail());
+    }
+
+    // Lectura del propio documento sin mirar el estado. Se usa solo para la
+    // configuracion personal: la app necesita leerla para poder explicarle a
+    // quien ya salio que su acceso termino.
+    function readsOwnDoc() {
+      return signedIn() && resource.data.email == effectiveEmail();
     }
 
     function readsOwnResource() {
-      return signedIn() && resource.data.email == effectiveEmail();
+      return readsOwnDoc() && memberEnabled(effectiveEmail());
     }
 
     // ===== Manager Musicala =====
@@ -224,8 +272,9 @@ service cloud.firestore {
 
     // ===== Configuracion de horarios por miembro =====
     match /adminMemberSettings/{memberId} {
-      // El miembro puede leer su propia configuracion; el admin lee todo.
-      allow read: if isAdmin() || readsOwnResource();
+      // El miembro puede leer su propia configuracion (aunque este inactivo o
+      // retirado: la app usa ese dato para avisarle); el admin lee todo.
+      allow read: if isAdmin() || readsOwnDoc();
       // Solo admins crean/editan horarios del equipo.
       allow create, update: if isAdmin();
       allow delete: if false;

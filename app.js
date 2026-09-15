@@ -1196,13 +1196,14 @@ function adminMemberList() {
       endDate: /^\d{4}-\d{2}-\d{2}$/.test(s.endDate || "") ? s.endDate : "",
       retired: isMemberRetiredOn(email, todayBogota())
     };
-  }).filter((m) => m.active).sort((a, b) => a.name.localeCompare(b.name));
+  }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/* Quienes siguen vinculadas hoy. Las retiradas permanecen en estadísticas e
-   historial, pero salen de los tableros y selectores del día a día. */
+/* Quienes siguen vinculadas hoy. Las inactivas y retiradas permanecen en
+   estadísticas, registros y configuración —el historial nunca se pierde—,
+   pero salen de los tableros y selectores del día a día. */
 function currentMemberList() {
-  return adminMemberList().filter((m) => !m.retired);
+  return adminMemberList().filter((m) => m.active && !m.retired);
 }
 
 function statsMemberList() {
@@ -1690,8 +1691,10 @@ function calendarMembers() {
     const own = MEMBER_SETTINGS[ACTIVE_EMAIL] || defaultSettingsFor(ACTIVE_EMAIL, { seeded: true });
     return [{ email: ACTIVE_EMAIL, name: own.name || getProfileName(ACTIVE_EMAIL), settings: own, active: true }];
   }
-  // Los admins solo consultan calendarios de las trabajadoras, no los propios
-  return adminMemberList().filter((m) => !isAdminEmail(m.email));
+  // Los admins solo consultan calendarios de las trabajadoras, no los propios.
+  // Las vinculadas van primero; las inactivas siguen disponibles para consultar.
+  const all = adminMemberList().filter((m) => !isAdminEmail(m.email));
+  return [...all.filter((m) => m.active && !m.retired), ...all.filter((m) => !m.active || m.retired)];
 }
 
 function annualCalendarStats(email, year) {
@@ -3526,7 +3529,7 @@ async function renderConfigTab() {
     <section class="filtersBar card">
       <label class="field"><span class="fieldLabel">Miembro</span>
         <select id="cfg-member" class="input">
-          ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}${m.retired ? ` · retirada el ${escapeHtml(m.endDate)}` : ""}</option>`).join("")}
+          ${members.map((m) => `<option value="${escapeHtml(m.email)}" ${m.email === CONFIG_EMAIL ? "selected" : ""}>${escapeHtml(m.name)}${m.retired ? ` · retirada el ${escapeHtml(m.endDate)}` : (m.active ? "" : " · sin acceso")}</option>`).join("")}
         </select></label>
       <button class="btnGhost btnSmall" type="button" id="cfg-add-override">+ Excepción / cambio de horario</button>
     </section>
@@ -3646,7 +3649,7 @@ function renderMemberSettings() {
             <button class="btnGhost btnSmall" type="button" id="btn-add-lunch-history">+ Agregar cambio de almuerzo</button>
           </div>
         </div>
-        <p class="modalNote">El último día de trabajo cierra el vínculo: desde el día siguiente esta persona no puede entrar al hub ni tiene jornada esperada, y su historial se conserva completo. Déjalo vacío si sigue trabajando.${s.endDate ? ` Hoy figura como retirada desde el ${escapeHtml(s.endDate)}.` : ""}</p>
+        <p class="modalNote">Quitar <strong>Miembro activo</strong> corta el acceso de inmediato, en la app y en la base de datos: esa persona no puede entrar ni marcar jornada, aunque su historial se conserva completo. El <strong>último día de trabajo</strong> hace lo mismo de forma automática desde el día siguiente a esa fecha; déjalo vacío si sigue trabajando.${s.endDate ? ` Hoy figura como retirada desde el ${escapeHtml(s.endDate)}.` : ""}</p>
         <div class="cfgToggles">
           <label class="field checkField"><input type="checkbox" id="m-active" ${s.active ? "checked" : ""}> <span>Miembro activo</span></label>
           <label class="field checkField"><input type="checkbox" id="m-remote" ${s.canWorkRemote ? "checked" : ""}> <span>Puede marcar remoto</span></label>
@@ -3876,7 +3879,8 @@ async function saveMemberGeneral() {
     altEmail,
     name: $("#m-name").value.trim(),
     role: $("#m-role").value,
-    active: $("#m-active").checked,
+    // Un retiro ya cumplido apaga el acceso aunque la casilla siga marcada.
+    active: $("#m-active").checked && !(endDate && endDate < todayBogota()),
     canWorkRemote: $("#m-remote").checked,
     contractType: $("#m-contract-type").value === "fijo" ? "fijo" : "indefinido",
     contractEndDate: $("#m-contract-type").value === "fijo" ? $("#m-contract-end").value : "",
