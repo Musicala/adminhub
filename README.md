@@ -93,6 +93,11 @@ createdBy, createdAt, createdAtClient
 - Un miembro bloqueado conserva la lectura de **su propia** `adminMemberSettings`:
   la app necesita ese dato para avisarle que su acceso terminó.
 - Pruebas: `tests/firestore-rules.test.mjs` (20 casos) contra el emulador.
+- ⚠️ Este proyecto Firebase es **compartido** (Admin Hub, Compras, Manager, nómina, Wix)
+  y cada despliegue reemplaza el archivo completo. Antes de publicar, copia lo que está
+  vivo en la consola a `consola.rules` y corre
+  `tests/firestore-rules-diff.mjs consola.rules firestore.rules`: muestra en qué cambia
+  el comportamiento y avisa si el repo se quedó atrás respecto a lo desplegado.
 - `adminShiftRecords`: el miembro crea/actualiza **su** registro (flujo normal); el admin
   puede crear/actualizar cualquiera (correcciones). Lectura: dueño ve lo suyo, admin ve todo.
 - `adminMemberSettings` / `adminScheduleOverrides`: lectura propia o admin; escritura **solo admin**.
