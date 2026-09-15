@@ -136,6 +136,7 @@ const DEFAULT_DAY = {
   end: "16:00",
   modality: "sede",
   graceMinutes: 5,
+  graceIsException: false,
   notes: ""
 };
 
@@ -554,7 +555,7 @@ function normalizeOverride(id, data) {
     start: data?.start || DEFAULT_DAY.start,
     end: data?.end || DEFAULT_DAY.end,
     modality: data?.modality || "sede",
-    graceMinutes: Number.isFinite(data?.graceMinutes) ? data.graceMinutes : 5,
+    graceMinutes: Number.isFinite(data?.graceMinutes) ? data.graceMinutes : null,
     eventReason: normalizeScheduleEventReason(data?.eventReason, data?.reason, enabled),
     reason: data?.reason || "",
     createdBy: data?.createdBy || "",
@@ -664,6 +665,9 @@ function normalizeSettings(data) {
       end: day.end || DEFAULT_DAY.end,
       modality: day.modality || "sede",
       graceMinutes: Number.isFinite(day.graceMinutes) ? day.graceMinutes : (data?.defaultGraceMinutes ?? 5),
+      // Solo cuenta como excepción del día si se marcó explícitamente; si no,
+      // manda la vigencia general (gracia por defecto + historial "desde").
+      graceIsException: Boolean(day.graceIsException) && Number.isFinite(day.graceMinutes),
       notes: day.notes || ""
     };
   }
@@ -707,13 +711,18 @@ function normalizeGraceHistory(raw, fallback = 5) {
 
 function graceMinutesForDate(settings, day, date) {
   const fallback = Number.isFinite(settings?.defaultGraceMinutes) ? settings.defaultGraceMinutes : 5;
-  // Un valor diario diferente de la gracia general es una excepción manual.
-  if (Number.isFinite(day?.graceMinutes) && day.graceMinutes !== fallback) return day.graceMinutes;
+  // La excepción del día solo gana si fue marcada como tal de forma explícita.
+  if (day?.graceIsException && Number.isFinite(day?.graceMinutes)) return day.graceMinutes;
   const history = settings?.graceHistory;
-  if (!Array.isArray(history) || !history.length) return Number.isFinite(day?.graceMinutes) ? day.graceMinutes : fallback;
+  if (!Array.isArray(history) || !history.length) return fallback;
   let pick = history[0];
   for (const entry of history) { if (!entry.from || entry.from <= date) pick = entry; else break; }
-  return pick.minutes;
+  return Number.isFinite(pick?.minutes) ? pick.minutes : fallback;
+}
+
+/* Gracia vigente para una fecha sin mirar el horario semanal (base + "desde"). */
+function generalGraceMinutesForDate(settings, date) {
+  return graceMinutesForDate(settings, null, date);
 }
 
 function normalizeLunchBreakHistory(raw, fallback = 60) {
@@ -830,7 +839,7 @@ function getExpectedScheduleForDate(email, date) {
       source: "override",
       start: override.start, end: override.end,
       modality: override.modality || "sede",
-      graceMinutes: Number.isFinite(override.graceMinutes) ? override.graceMinutes : 5,
+      graceMinutes: Number.isFinite(override.graceMinutes) ? override.graceMinutes : generalGraceMinutesForDate(settings, date),
       breakMinutes: lunchBreakMinutesForShift(lunchBreakMinutesForDate(settings, date), override.start, override.end),
       reason: override.reason || ""
     };
@@ -3579,7 +3588,7 @@ function renderMemberSettings() {
         </div>
         <div style="margin-top:12px">
           <h3 class="sectionH" style="margin-bottom:4px">Vigencias de la gracia</h3>
-          <p class="modalNote">La fila sin fecha aplica desde el inicio. Agrega un cambio para que las marcaciones desde esa fecha usen otra gracia; las excepciones de horario por fecha conservan prioridad.</p>
+          <p class="modalNote">La fila sin fecha aplica desde el inicio. Agrega un cambio para que las marcaciones desde esa fecha usen otra gracia. Un día solo ignora esta vigencia si le escribes una gracia propia en el horario semanal; déjalo vacío para que siga la general.</p>
           <div class="targetRows" id="m-grace-history">
             ${(s.graceHistory?.length ? s.graceHistory : [{ from: "", minutes: s.defaultGraceMinutes }]).map(graceHistoryRowHtml).join("")}
           </div>
@@ -3630,7 +3639,7 @@ function renderMemberSettings() {
               <label class="field mini"><span class="fieldLabel">Salida</span><input type="time" class="input day-end" value="${escapeHtml(day.end)}"></label>
               <label class="field mini"><span class="fieldLabel">Modalidad</span>
                 <select class="input day-modality">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${day.modality === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
-              <label class="field mini"><span class="fieldLabel">Gracia del día (excepción)</span><input type="number" class="input day-grace" min="0" max="120" value="${day.graceMinutes}"></label>
+              <label class="field mini"><span class="fieldLabel">Gracia del día (excepción)</span><input type="number" class="input day-grace" min="0" max="120" placeholder="General: ${generalGraceMinutesForDate(s, todayBogota())}" value="${day.graceIsException ? day.graceMinutes : ""}"></label>
             </div>
             <input type="text" class="input day-notes" placeholder="Notas (opcional)" value="${escapeHtml(day.notes || "")}">
           </div>`;
@@ -3638,7 +3647,7 @@ function renderMemberSettings() {
       </div>
       <div class="modalActions">
         <button class="btnPrimary" type="button" id="btn-save-settings">Guardar horario</button>
-        <span class="modalNote" style="margin:0">Guarda solo metas de horas y horario semanal.</span>
+        <span class="modalNote" style="margin:0">Guarda solo metas de horas y horario semanal. Deja la gracia del día vacía para usar la vigencia general.</span>
       </div>
     </section>
 
@@ -3720,12 +3729,15 @@ async function saveMemberSettings() {
   const weekly = {};
   $$(".dayCard", host).forEach((card) => {
     const key = card.dataset.day;
+    const rawGrace = String($(".day-grace", card).value ?? "").trim();
     weekly[key] = {
       enabled: $(".day-enabled", card).checked,
       start: $(".day-start", card).value || DEFAULT_DAY.start,
       end: $(".day-end", card).value || DEFAULT_DAY.end,
       modality: $(".day-modality", card).value,
-      graceMinutes: Number($(".day-grace", card).value) || 0,
+      // Vacío = el día sigue la gracia general vigente (incluido su "desde").
+      graceMinutes: rawGrace === "" ? generalGraceMinutesForDate(MEMBER_SETTINGS[CONFIG_EMAIL], todayBogota()) : (Number(rawGrace) || 0),
+      graceIsException: rawGrace !== "",
       notes: $(".day-notes", card).value.trim()
     };
   });
@@ -3772,9 +3784,6 @@ async function saveMemberGeneral() {
   }
   const previousSettings = MEMBER_SETTINGS[CONFIG_EMAIL] || defaultSettingsFor(CONFIG_EMAIL);
   const previousAlt = previousSettings.altEmail || "";
-  const previousGraceMinutes = Number.isFinite(previousSettings.defaultGraceMinutes)
-    ? previousSettings.defaultGraceMinutes
-    : 5;
   const defaultGraceMinutes = Number($("#m-grace").value) || 0;
   const graceHistory = [];
   let invalidGraceHistory = false;
@@ -3811,14 +3820,11 @@ async function saveMemberGeneral() {
   }
   lunchBreakHistory.forEach((entry) => { if (!entry.from) entry.minutes = lunchBreakMinutes; });
   lunchBreakHistory.sort((a, b) => (a.from || "0000-00-00").localeCompare(b.from || "0000-00-00"));
-  // Los días inicialmente creados heredan la gracia general. Al cambiarla,
-  // sincronizamos únicamente los que aún tenían el valor general anterior;
-  // cualquier día ajustado manualmente conserva su excepción.
+  // Los días que no tienen excepción explícita siguen la vigencia general,
+  // así que solo refrescamos su valor informativo; las excepciones se conservan.
   const weeklySchedule = Object.fromEntries(Object.entries(previousSettings.weeklySchedule || {}).map(([dayKey, day]) => [
     dayKey,
-    Number.isFinite(day?.graceMinutes) && day.graceMinutes === previousGraceMinutes
-      ? { ...day, graceMinutes: defaultGraceMinutes }
-      : day
+    day?.graceIsException ? day : { ...day, graceMinutes: defaultGraceMinutes, graceIsException: false }
   ]));
   const payload = {
     email: CONFIG_EMAIL,
@@ -3917,7 +3923,7 @@ function openOverrideModalV2(email, existingOverride = null) {
       <label class="field"><span class="fieldLabel">Salida</span><input type="time" id="o-end" class="input" value="${escapeHtml(existingOverride?.end || "16:00")}"></label>
       <label class="field"><span class="fieldLabel">Modalidad</span>
         <select id="o-modality" class="input">${["sede", "remoto", "flexible"].map((m) => `<option value="${m}" ${(existingOverride?.modality || "sede") === m ? "selected" : ""}>${m}</option>`).join("")}</select></label>
-      <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : 5}"></label>
+      <label class="field"><span class="fieldLabel">Gracia (min)</span><input type="number" id="o-grace" class="input" min="0" max="120" value="${Number.isFinite(existingOverride?.graceMinutes) ? existingOverride.graceMinutes : generalGraceMinutesForDate(MEMBER_SETTINGS[email], initialDate)}"></label>
     </div>
     <label class="field checkField permanentCheck"><input type="checkbox" id="o-permanent" ${editing ? "disabled" : ""}> <span>Este es el nuevo horario permanente desde ahora</span></label>
     <label class="field"><span class="fieldLabel">Tipo de novedad</span>
@@ -4011,7 +4017,12 @@ function openOverrideModalV2(email, existingOverride = null) {
         const current = MEMBER_SETTINGS[email] || defaultSettingsFor(email, { seeded: true });
         const weeklySchedule = JSON.parse(JSON.stringify(current.weeklySchedule || defaultWeeklySchedule()));
         permanentDays.forEach((dayKey) => {
-          weeklySchedule[dayKey] = { ...(weeklySchedule[dayKey] || DEFAULT_DAY), enabled: true, start, end, modality, graceMinutes, notes: reason };
+          weeklySchedule[dayKey] = {
+            ...(weeklySchedule[dayKey] || DEFAULT_DAY), enabled: true, start, end, modality,
+            graceMinutes,
+            graceIsException: graceMinutes !== generalGraceMinutesForDate(current, todayBogota()),
+            notes: reason
+          };
         });
         const settingsPayload = {
           ...current,
